@@ -5,6 +5,12 @@ All notable user-facing changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- Select up to 100 conversations across result pages and export their default
+  active paths as one ordered Markdown, PDF, or plain-text document with exact
+  counts, a neutral filename, and the existing offline privacy controls.
+
 ## [0.2.1] - 2026-07-29
 
 ### Fixed

@@ -202,6 +202,28 @@ export class LocalApi {
     });
   }
 
+  conversationSetExportEstimate(
+    ids: string[],
+    format: ConversationExportFormat,
+    signal?: AbortSignal,
+  ): Promise<ConversationExportEstimate> {
+    return this.request('/api/conversation-set/export/estimate', {
+      method: 'POST',
+      body: JSON.stringify({ ids, format }),
+      signal,
+    });
+  }
+
+  saveConversationSetExport(
+    ids: string[],
+    format: ConversationExportFormat,
+  ): Promise<{ saved: boolean; fileName?: string }> {
+    return this.request('/api/conversation-set/export', {
+      method: 'POST',
+      body: JSON.stringify({ ids, format }),
+    });
+  }
+
   attachmentContent(id: string, signal?: AbortSignal): Promise<Blob> {
     return this.requestBlob(`/api/attachments/${encodeURIComponent(id)}/content`, signal);
   }

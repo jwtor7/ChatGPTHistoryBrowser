@@ -143,17 +143,22 @@ response includes an absolute filesystem path.
 ## Conversation document export
 
 Conversation export is an explicit user-initiated disclosure boundary. The
-application serializes only the selected active conversation path as Markdown,
-PDF, or plain text. It preserves message order, normalized roles, and
-timestamps. It does not include attachment bytes or names, filesystem paths,
-source or branch identifiers, index metadata, diagnostics, session
-capabilities, logs, or provider credentials.
+application serializes the chosen active path for one conversation, or the
+default active paths for an explicit selection of up to 100 conversations, as
+Markdown, PDF, or plain text. A manual selection persists across pages and
+filters but is sent to the backend as a bounded list of unique opaque IDs. The
+backend validates that list independently. Export preserves selection order,
+message order, normalized roles, and timestamps. It does not include attachment
+bytes or names, filesystem paths, source or branch identifiers, index metadata,
+diagnostics, session capabilities, logs, or provider credentials.
 
 Before opening the native save dialog, the UI shows the exact proposed
-title-based filename, format, message count, attachment count, and serialized
-byte count. A readable filename is useful but may reveal the conversation title
-through filesystem metadata, recent-file lists, backups, or sharing tools.
-Users should edit the destination name when the title itself is sensitive.
+filename, format, conversation count, message count, attachment count, and
+serialized byte count. A single-conversation title-based filename is useful but
+may reveal the conversation title through filesystem metadata, recent-file
+lists, backups, or sharing tools. Users should edit the destination name when
+the title itself is sensitive. Multi-conversation documents use a neutral
+count-based filename.
 
 Cancelling either the in-app confirmation or native dialog is reported as
 cancelled and creates no file. The chosen extension is enforced, the

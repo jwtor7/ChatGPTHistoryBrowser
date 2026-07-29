@@ -222,6 +222,33 @@ async function installSameOriginApi(page: Page, exportSelected = true) {
       return;
     }
 
+    if (url.pathname === '/api/conversation-set/export/estimate') {
+      const body = request.postDataJSON() as { ids: string[]; format: string };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversationCount: body.ids.length,
+          messageCount: body.ids.length * 3,
+          attachmentCount: 2,
+          byteSize: 8_192,
+          fileName: `Selected-conversations-${body.ids.length}.${body.format}`,
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/conversation-set/export') {
+      const body = request.postDataJSON() as { ids: string[]; format: string };
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          saved: true,
+          fileName: `Selected-conversations-${body.ids.length}.${body.format}`,
+        }),
+      });
+      return;
+    }
+
     if (url.pathname.startsWith('/api/conversations/')) {
       await route.fulfill({
         contentType: 'application/json',
@@ -317,6 +344,19 @@ test('production build browses safely with same-origin mocked APIs only', async 
     .toBe(true);
   await expect(page.getByText(/1 active.*audio/i)).toBeVisible();
   await page.getByRole('button', { name: /clear search and filters/i }).click();
+
+  await page.getByRole('checkbox', { name: /select this page/i }).check();
+  await expect(page.getByText('50 selected')).toBeVisible();
+  await page.getByRole('button', { name: /export selected/i }).click();
+  const selectedExportDialog = page.getByRole('dialog', {
+    name: /export 50 selected conversations/i,
+  });
+  await expect(selectedExportDialog).toBeVisible();
+  await expect(selectedExportDialog.getByText(/default active paths/i)).toBeVisible();
+  await expect(selectedExportDialog.getByText('Selected-conversations-50.md')).toBeVisible();
+  await expect(selectedExportDialog.getByText('150', { exact: true })).toBeVisible();
+  await selectedExportDialog.getByRole('button', { name: /cancel/i }).click();
+  await expect(page.getByRole('status')).toContainText(/export cancelled/i);
 
   if (process.env.GENERATE_SYNTHETIC_SCREENSHOT === '1') {
     await page.waitForTimeout(800);

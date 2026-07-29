@@ -716,7 +716,7 @@ select,
 .browser-sidebar {
   display: grid;
   grid-area: sidebar;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
   background: #f5f3ed;
@@ -848,6 +848,54 @@ select,
   text-transform: uppercase;
 }
 
+.selection-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 0.55rem;
+  align-items: center;
+  padding: 0.5rem 0.8rem 0.65rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.selection-toolbar > label {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.selection-toolbar input[type='checkbox'],
+.conversation-export-selector input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.selection-count {
+  justify-self: end;
+  color: var(--ink-faint);
+  font-size: 0.7rem;
+}
+
+.selection-toolbar .button {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.selection-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
 .conversation-list {
   min-height: 0;
   overflow-y: auto;
@@ -866,6 +914,26 @@ select,
   left: 0;
   width: 100%;
   padding: 0 0.55rem 0.25rem;
+}
+
+.conversation-row-shell {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: stretch;
+  border-radius: 9px;
+  transition: background-color 150ms ease;
+}
+
+.conversation-row-shell.is-export-selected {
+  background: var(--accent-soft);
+}
+
+.conversation-export-selector {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 0.9rem;
+  cursor: pointer;
 }
 
 .conversation-row {
@@ -1655,7 +1723,7 @@ select,
 
 .export-estimate {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
   margin: 1.25rem 0 0;
 }

@@ -48,6 +48,13 @@ function urlOf(input: RequestInfo | URL): string {
   return input.url;
 }
 
+function jsonRequestBody(init?: RequestInit): unknown {
+  if (typeof init?.body !== 'string') {
+    throw new Error('Expected a synthetic JSON request body.');
+  }
+  return JSON.parse(init.body) as unknown;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -196,6 +203,8 @@ describe('History Browser frontend', () => {
 
     const requestedUrls: string[] = [];
     let exportSaveCalls = 0;
+    let conversationSetSaveCalls = 0;
+    const conversationSetRequests: Array<{ ids: string[]; format: string }> = [];
     let holdFirstPdfEstimate = true;
     let initialExportEstimateReady = false;
     let resolveInitialExportEstimate: ((response: Response) => void) | undefined;
@@ -295,6 +304,29 @@ describe('History Browser frontend', () => {
             }),
           );
         }
+        if (url === '/api/conversation-set/export/estimate') {
+          const request = jsonRequestBody(init) as {
+            ids: string[];
+            format: string;
+          };
+          conversationSetRequests.push(request);
+          return Promise.resolve(
+            json({
+              conversationCount: request.ids.length,
+              messageCount: request.ids.length,
+              attachmentCount: 0,
+              byteSize: request.format === 'pdf' ? 6_144 : 3_072,
+              fileName: `Selected-conversations-${request.ids.length}.${request.format}`,
+            }),
+          );
+        }
+        if (url === '/api/conversation-set/export') {
+          conversationSetSaveCalls += 1;
+          conversationSetRequests.push(
+            jsonRequestBody(init) as { ids: string[]; format: string },
+          );
+          return Promise.resolve(json({ saved: false }));
+        }
         if (url.includes('?leaf=synthetic-branch-leaf')) {
           return Promise.resolve(json(detail(true)));
         }
@@ -349,11 +381,17 @@ describe('History Browser frontend', () => {
       expect(container.querySelector('.result-summary')).toHaveTextContent('120 conversations');
     });
 
+    await user.click(screen.getByRole('checkbox', { name: /select this page/i }));
+    expect(screen.getByText('50 selected')).toBeVisible();
     await user.click(screen.getByRole('button', { name: /next page/i }));
     await waitFor(() => {
       expect(requestedUrls.some((url) => url.includes('page=1'))).toBe(true);
     });
     expect(screen.getByText('Page 2 of 3')).toBeVisible();
+    expect(screen.getByText('50 selected')).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /select this page/i })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: /^clear$/i }));
+    expect(screen.getByText('0 selected')).toBeVisible();
 
     const search = screen.getByRole('searchbox', {
       name: /search conversations/i,
@@ -363,6 +401,40 @@ describe('History Browser frontend', () => {
     await user.click(screen.getByRole('button', { name: /^search$/i }));
     await waitFor(() => {
       expect(requestedUrls.some((url) => url.includes('search=fictional+atlas'))).toBe(true);
+    });
+
+    await user.click(screen.getByRole('checkbox', { name: /select this page/i }));
+    expect(screen.getByText('2 selected')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /export selected/i }));
+    const selectedExportDialog = await screen.findByRole('dialog', {
+      name: /export 2 selected conversations/i,
+    });
+    expect(selectedExportDialog).toHaveTextContent(/default active paths/i);
+    expect(selectedExportDialog).toHaveTextContent(/2 selected conversations/i);
+    expect(selectedExportDialog).toHaveTextContent(
+      /alternate branches and attachments aren.t/i,
+    );
+    expect(
+      await within(selectedExportDialog).findByText('Selected-conversations-2.md'),
+    ).toBeVisible();
+    expect(conversationSetRequests[0]).toEqual({
+      ids: [items[0].id, items[1].id],
+      format: 'md',
+    });
+    await user.click(within(selectedExportDialog).getByRole('radio', { name: /plain text/i }));
+    expect(
+      await within(selectedExportDialog).findByText('Selected-conversations-2.txt'),
+    ).toBeVisible();
+    await user.click(
+      within(selectedExportDialog).getByRole('button', { name: /save plain text/i }),
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /export cancelled.*no file was created/i,
+    );
+    expect(conversationSetSaveCalls).toBe(1);
+    expect(conversationSetRequests.at(-1)).toEqual({
+      ids: [items[0].id, items[1].id],
+      format: 'txt',
     });
 
     await user.click(screen.getByRole('button', { name: /branch 1/i }));

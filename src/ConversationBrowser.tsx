@@ -38,6 +38,20 @@ import type {
 
 const PAGE_SIZE = 50;
 const ATTACHMENT_BATCH_SIZE = 24;
+const MAX_SELECTED_CONVERSATIONS = 100;
+
+type ConversationExportTarget =
+  | {
+      kind: 'single';
+      id: string;
+      leaf?: string;
+      title: string;
+    }
+  | {
+      kind: 'selection';
+      ids: string[];
+      title: string;
+    };
 
 const INITIAL_FILTERS: ConversationFilters = {
   page: 0,
@@ -122,45 +136,63 @@ function roleDetails(role: string): { className: string; label: string } {
 function ConversationRow({
   item,
   selected,
+  selectedForExport,
   onSelect,
+  onToggleExportSelection,
 }: {
   item: ConversationListItem;
   selected: boolean;
+  selectedForExport: boolean;
   onSelect: () => void;
+  onToggleExportSelection: () => void;
 }) {
   return (
-    <button
-      type="button"
-      className={`conversation-row${selected ? ' is-selected' : ''}${
-        item.matchPreview ? ' has-match' : ''
-      }`}
-      onClick={onSelect}
-      aria-current={selected ? 'true' : undefined}
-    >
-      <span className="conversation-row-heading">
-        <strong>{item.title || 'Untitled conversation'}</strong>
-        {item.starred ? <Star size={14} aria-label="Starred" /> : null}
-      </span>
-      <span className="conversation-row-meta">
-        <span>{formatDate(item.updatedAt ?? item.createdAt)}</span>
-        <span>{item.messageCount} messages</span>
-        {item.hasAttachments ? <Paperclip size={13} aria-label="Has attachments" /> : null}
-      </span>
-      {item.matchPreview ? (
-        <span className="conversation-row-match">{item.matchPreview}</span>
-      ) : null}
-    </button>
+    <div className={`conversation-row-shell${selectedForExport ? ' is-export-selected' : ''}`}>
+      <label className="conversation-export-selector">
+        <input
+          type="checkbox"
+          checked={selectedForExport}
+          onChange={onToggleExportSelection}
+          aria-label={`Select ${item.title || 'Untitled conversation'} for export`}
+        />
+      </label>
+      <button
+        type="button"
+        className={`conversation-row${selected ? ' is-selected' : ''}${
+          item.matchPreview ? ' has-match' : ''
+        }`}
+        onClick={onSelect}
+        aria-current={selected ? 'true' : undefined}
+      >
+        <span className="conversation-row-heading">
+          <strong>{item.title || 'Untitled conversation'}</strong>
+          {item.starred ? <Star size={14} aria-label="Starred" /> : null}
+        </span>
+        <span className="conversation-row-meta">
+          <span>{formatDate(item.updatedAt ?? item.createdAt)}</span>
+          <span>{item.messageCount} messages</span>
+          {item.hasAttachments ? <Paperclip size={13} aria-label="Has attachments" /> : null}
+        </span>
+        {item.matchPreview ? (
+          <span className="conversation-row-match">{item.matchPreview}</span>
+        ) : null}
+      </button>
+    </div>
   );
 }
 
 function ConversationList({
   page,
   selectedId,
+  selectedForExport,
   onSelect,
+  onToggleExportSelection,
 }: {
   page: ConversationPage;
   selectedId: string | null;
+  selectedForExport: ReadonlySet<string>;
   onSelect: (id: string) => void;
+  onToggleExportSelection: (id: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // TanStack Virtual intentionally returns imperative functions used only here.
@@ -192,7 +224,9 @@ function ConversationList({
               <ConversationRow
                 item={item}
                 selected={selectedId === item.id}
+                selectedForExport={selectedForExport.has(item.id)}
                 onSelect={() => onSelect(item.id)}
+                onToggleExportSelection={() => onToggleExportSelection(item.id)}
               />
             </div>
           );
@@ -337,15 +371,13 @@ export function ConversationBrowser({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
+  const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmExport, setConfirmExport] = useState(false);
   const [exportFormat, setExportFormat] = useState<ConversationExportFormat>('md');
   const [exportEstimate, setExportEstimate] = useState<ConversationExportEstimate | null>(null);
-  const [exportTarget, setExportTarget] = useState<{
-    id: string;
-    leaf?: string;
-    title: string;
-  } | null>(null);
+  const [exportTarget, setExportTarget] = useState<ConversationExportTarget | null>(null);
   const [exportEstimating, setExportEstimating] = useState(false);
   const [exportSaving, setExportSaving] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -530,6 +562,10 @@ export function ConversationBrowser({
     () => (page ? Math.max(1, Math.ceil(page.total / page.pageSize)) : 1),
     [page],
   );
+  const selectedForExportSet = useMemo(() => new Set(selectedForExport), [selectedForExport]);
+  const visiblePageFullySelected =
+    Boolean(page?.items.length) &&
+    page?.items.every((item) => selectedForExportSet.has(item.id)) === true;
   const activeFilterCount = [
     filters.dateFrom,
     filters.dateTo,
@@ -624,13 +660,58 @@ export function ConversationBrowser({
     }
   }
 
-  async function prepareConversationExport() {
-    if (!detail) return;
-    const target = {
-      id: detail.id,
-      leaf: detail.selectedLeaf ?? undefined,
-      title: detail.title || 'Untitled conversation',
-    };
+  function toggleExportSelection(id: string) {
+    setSelectedForExport((current) => {
+      if (current.includes(id)) {
+        setSelectionError(null);
+        return current.filter((selected) => selected !== id);
+      }
+      if (current.length >= MAX_SELECTED_CONVERSATIONS) {
+        setSelectionError(
+          `Select at most ${MAX_SELECTED_CONVERSATIONS} conversations per document.`,
+        );
+        return current;
+      }
+      setSelectionError(null);
+      return [...current, id];
+    });
+  }
+
+  function toggleVisiblePageSelection() {
+    if (!page) return;
+    const visibleIds = page.items.map((item) => item.id);
+    if (visiblePageFullySelected) {
+      const visible = new Set(visibleIds);
+      setSelectionError(null);
+      setSelectedForExport((current) => current.filter((id) => !visible.has(id)));
+      return;
+    }
+    setSelectedForExport((current) => {
+      const selected = new Set(current);
+      const additions = visibleIds.filter((id) => !selected.has(id));
+      if (current.length + additions.length > MAX_SELECTED_CONVERSATIONS) {
+        setSelectionError(
+          `Select at most ${MAX_SELECTED_CONVERSATIONS} conversations per document.`,
+        );
+        return current;
+      }
+      setSelectionError(null);
+      return [...current, ...additions];
+    });
+  }
+
+  function estimateConversationExport(
+    target: ConversationExportTarget,
+    format: ConversationExportFormat,
+    signal: AbortSignal,
+  ): Promise<ConversationExportEstimate> {
+    return target.kind === 'single'
+      ? api.conversationExportEstimate(target.id, format, target.leaf, signal)
+      : api.conversationSetExportEstimate(target.ids, format, signal);
+  }
+
+  async function prepareExport(target: ConversationExportTarget, trigger: HTMLButtonElement) {
+    exportTriggerRef.current = trigger;
     const format: ConversationExportFormat = 'md';
     setExportTarget(target);
     setExportFormat(format);
@@ -643,12 +724,7 @@ export function ConversationBrowser({
     setExportError(null);
     setExportStatus(null);
     try {
-      const estimate = await api.conversationExportEstimate(
-        target.id,
-        format,
-        target.leaf,
-        controller.signal,
-      );
+      const estimate = await estimateConversationExport(target, format, controller.signal);
       if (controller.signal.aborted) return;
       setExportEstimate(estimate);
     } catch (error) {
@@ -661,6 +737,30 @@ export function ConversationBrowser({
     }
   }
 
+  async function prepareConversationExport(trigger: HTMLButtonElement) {
+    if (!detail) return;
+    const target: ConversationExportTarget = {
+      kind: 'single',
+      id: detail.id,
+      leaf: detail.selectedLeaf ?? undefined,
+      title: detail.title || 'Untitled conversation',
+    };
+    await prepareExport(target, trigger);
+  }
+
+  async function prepareSelectedConversationExport(trigger: HTMLButtonElement) {
+    if (selectedForExport.length === 0) return;
+    const ids = [...selectedForExport];
+    await prepareExport(
+      {
+        kind: 'selection',
+        ids,
+        title: `${ids.length.toLocaleString()} selected conversations`,
+      },
+      trigger,
+    );
+  }
+
   async function chooseExportFormat(format: ConversationExportFormat) {
     if (!exportTarget || (format === exportFormat && exportEstimate)) return;
     exportEstimateAbortRef.current?.abort();
@@ -671,10 +771,9 @@ export function ConversationBrowser({
     setExportEstimating(true);
     setExportError(null);
     try {
-      const estimate = await api.conversationExportEstimate(
-        exportTarget.id,
+      const estimate = await estimateConversationExport(
+        exportTarget,
         format,
-        exportTarget.leaf,
         controller.signal,
       );
       if (controller.signal.aborted) return;
@@ -702,11 +801,10 @@ export function ConversationBrowser({
     setExportSaving(true);
     setExportError(null);
     try {
-      const result = await api.saveConversationExport(
-        exportTarget.id,
-        exportFormat,
-        exportTarget.leaf,
-      );
+      const result =
+        exportTarget.kind === 'single'
+          ? await api.saveConversationExport(exportTarget.id, exportFormat, exportTarget.leaf)
+          : await api.saveConversationSetExport(exportTarget.ids, exportFormat);
       setConfirmExport(false);
       setExportStatus(
         result.saved
@@ -912,6 +1010,57 @@ export function ConversationBrowser({
               : `${page?.total.toLocaleString() ?? 0} conversations`}
           </div>
 
+          <div className="selection-toolbar">
+            {page && page.items.length > 0 ? (
+              <>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={visiblePageFullySelected}
+                    onChange={toggleVisiblePageSelection}
+                  />
+                  <span>Select this page</span>
+                </label>
+                <span className="selection-count" aria-live="polite">
+                  {selectedForExport.length.toLocaleString()} selected
+                </span>
+                <button
+                  type="button"
+                  className="button button-primary button-small"
+                  onClick={(event) =>
+                    void prepareSelectedConversationExport(event.currentTarget)
+                  }
+                  disabled={selectedForExport.length === 0 || exportBusy}
+                >
+                  <Download size={14} aria-hidden="true" />
+                  Export selected…
+                </button>
+                {selectedForExport.length > 0 ? (
+                  <button
+                    type="button"
+                    className="button button-quiet button-small"
+                    onClick={() => {
+                      setSelectedForExport([]);
+                      setSelectionError(null);
+                    }}
+                    disabled={exportBusy}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                {selectionError ? (
+                  <p className="selection-error" role="alert">
+                    {selectionError}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <span className="selection-count">
+                {selectedForExport.length.toLocaleString()} selected
+              </span>
+            )}
+          </div>
+
           {listError ? (
             <div className="inline-error" role="alert">
               <p>{listError}</p>
@@ -948,7 +1097,9 @@ export function ConversationBrowser({
             <ConversationList
               page={page}
               selectedId={selectedId}
+              selectedForExport={selectedForExportSet}
               onSelect={chooseConversation}
+              onToggleExportSelection={toggleExportSelection}
             />
           ) : null}
 
@@ -1061,10 +1212,9 @@ export function ConversationBrowser({
                 </div>
                 <div className="conversation-export-actions">
                   <button
-                    ref={exportTriggerRef}
                     type="button"
                     className="button button-quiet button-small"
-                    onClick={() => void prepareConversationExport()}
+                    onClick={(event) => void prepareConversationExport(event.currentTarget)}
                     disabled={exportBusy}
                   >
                     <Download size={15} aria-hidden="true" />
@@ -1173,14 +1323,28 @@ export function ConversationBrowser({
             aria-describedby="export-description"
           >
             <Download size={24} aria-hidden="true" />
-            <h2 id="export-title">Export “{exportTarget.title}”</h2>
-            <p id="export-description">
-              This document contains private conversation data. Its suggested filename uses the
-              conversation title and may appear in recent files or backups. Nothing is uploaded,
-              and only the currently selected message path is included; alternate branches and
-              attachments aren&apos;t. Sharing or importing the saved file transfers its
-              conversation data to the destination.
-            </p>
+            <h2 id="export-title">
+              {exportTarget.kind === 'single'
+                ? `Export “${exportTarget.title}”`
+                : `Export ${exportTarget.title}`}
+            </h2>
+            {exportTarget.kind === 'single' ? (
+              <p id="export-description">
+                This document contains private conversation data. Its suggested filename uses
+                the conversation title and may appear in recent files or backups. Nothing is
+                uploaded, and only the currently selected message path is included; alternate
+                branches and attachments aren&apos;t. Sharing or importing the saved file
+                transfers its conversation data to the destination.
+              </p>
+            ) : (
+              <p id="export-description">
+                This document contains the default active paths for{' '}
+                {exportTarget.ids.length.toLocaleString()} selected conversations. Nothing is
+                uploaded. Alternate branches and attachments aren&apos;t included. Sharing or
+                importing the saved file transfers all included conversation data to the
+                destination.
+              </p>
+            )}
             <fieldset className="export-format">
               <legend>Format</legend>
               {(
@@ -1213,6 +1377,10 @@ export function ConversationBrowser({
             </div>
             {exportEstimate ? (
               <dl className="export-estimate">
+                <div>
+                  <dt>Conversations</dt>
+                  <dd>{exportEstimate.conversationCount.toLocaleString()}</dd>
+                </div>
                 <div>
                   <dt>Messages</dt>
                   <dd>{exportEstimate.messageCount.toLocaleString()}</dd>
