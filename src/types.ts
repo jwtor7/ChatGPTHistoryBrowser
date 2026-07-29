@@ -95,6 +95,13 @@ export interface ConversationDetail {
   diagnostics: DiagnosticView[];
 }
 
+export interface PortableExportEstimate {
+  conversationCount: number;
+  messageCount: number;
+  attachmentCount: number;
+  byteSize: number;
+}
+
 export interface ConversationFilters {
   page: number;
   pageSize: number;

@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    io::Write,
     net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener},
     path::{Path, PathBuf},
     pin::Pin,
@@ -24,7 +25,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::Rng;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
 use tokio::{
@@ -44,6 +45,7 @@ use crate::{
     error::{AppError, AppResult, ErrorCode},
     indexer::{ArchiveSession, IndexCoordinator},
     models::{AppStatus, ConversationQuery, ExportValidation, IndexProgress, PreviewKind},
+    portable_export::{PortableExportEstimate, portable_file_name, serialize_portable_context},
     safe_root::SafeExportRoot,
 };
 
@@ -199,19 +201,34 @@ pub fn spawn_loopback(
 }
 
 fn build_router(state: ServerState, web_root: PathBuf) -> Router {
-    let api = Router::new()
+    let bounded_api = Router::new()
         .route("/api/status", get(status))
-        .route("/api/export/pick", post(pick_export))
         .route("/api/index/start", post(start_index))
         .route("/api/index/cancel", post(cancel_index))
         .route("/api/index/discard", post(discard_index))
         .route("/api/index/status", get(index_status))
         .route("/api/conversations", get(list_conversations))
         .route("/api/conversations/{id}", get(get_conversation))
+        .route(
+            "/api/conversations/{id}/portable-export",
+            get(portable_export_estimate),
+        )
         .route("/api/attachments/{id}/content", get(attachment_content))
         .route("/api/attachments/{id}/text", get(attachment_text))
+        .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
+    let interactive_api = Router::new()
+        .route("/api/export/pick", post(pick_export))
+        .route(
+            "/api/conversations/{id}/portable-export",
+            post(save_portable_export),
+        )
         .route("/api/attachments/{id}/save", post(save_attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api));
+    let api = bounded_api.merge(interactive_api);
     let static_files = ServeDir::new(web_root.clone())
         .append_index_html_on_directories(true)
         .fallback(ServeFile::new(web_root.join("index.html")));
@@ -220,10 +237,6 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
         .merge(api)
         .fallback_service(static_files)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            REQUEST_TIMEOUT,
-        ))
         .layer(middleware::from_fn(security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), enforce_host))
         .with_state(state)
@@ -430,6 +443,88 @@ async fn get_conversation(
     Ok(Json(detail))
 }
 
+async fn portable_export_estimate(
+    State(state): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<DetailQuery>,
+) -> AppResult<Json<PortableExportEstimate>> {
+    let (_, estimate) = build_portable_export(&state, id, query.leaf).await?;
+    Ok(Json(estimate))
+}
+
+async fn save_portable_export(
+    State(state): State<ServerState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<DetailQuery>,
+) -> AppResult<Json<SaveResult>> {
+    let root = state.session()?.root.clone();
+    let (bytes, _) = build_portable_export(&state, id.clone(), query.leaf).await?;
+    let file_name = portable_file_name(&id)?;
+    let dispatcher = state
+        .main_thread_dispatcher
+        .as_ref()
+        .ok_or(AppError::Internal)?;
+    let selected = build_future_on_main_thread(dispatcher, move || {
+        let selection = rfd::AsyncFileDialog::new()
+            .set_title("Save portable conversation context")
+            .set_file_name(file_name)
+            .save_file();
+        async move {
+            selection
+                .await
+                .map(|selected| selected.path().to_path_buf())
+        }
+    })
+    .await?;
+    let Some(destination) = selected else {
+        return Ok(Json(SaveResult { saved: false }));
+    };
+    tokio::task::spawn_blocking(move || -> AppResult<()> {
+        if !root.write_destination_is_outside_root(&destination) {
+            return Err(ErrorCode::PathRejected.into());
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(&destination)
+            && (metadata.file_type().is_symlink() || !metadata.is_file())
+        {
+            return Err(ErrorCode::PathRejected.into());
+        }
+        let mut target = create_private_file(&destination)?;
+        target.write_all(&bytes).map_err(|_| ErrorCode::Internal)?;
+        target.sync_all().map_err(|_| ErrorCode::Internal)?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| AppError::Internal)??;
+    Ok(Json(SaveResult { saved: true }))
+}
+
+async fn build_portable_export(
+    state: &ServerState,
+    id: String,
+    selected_leaf: Option<String>,
+) -> AppResult<(Vec<u8>, PortableExportEstimate)> {
+    let store = state.session()?.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let detail = store.conversation_detail(&id, selected_leaf.as_deref())?;
+        serialize_portable_context(&detail)
+    })
+    .await
+    .map_err(|_| AppError::Internal)?
+}
+
+fn create_private_file(path: &Path) -> AppResult<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|_| ErrorCode::PathRejected.into())
+}
+
 async fn attachment_content(
     State(state): State<ServerState>,
     AxumPath(id): AxumPath<String>,
@@ -577,6 +672,9 @@ async fn save_attachment(
     let root = session.root.clone();
     let source_name = record.source_name;
     tokio::task::spawn_blocking(move || -> AppResult<()> {
+        if !root.write_destination_is_outside_root(&destination) {
+            return Err(ErrorCode::PathRejected.into());
+        }
         if let Ok(metadata) = std::fs::symlink_metadata(&destination)
             && (metadata.file_type().is_symlink() || !metadata.is_file())
         {

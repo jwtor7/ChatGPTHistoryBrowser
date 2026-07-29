@@ -19,7 +19,7 @@ tauri-build = { version = "2.5.1", features = [] }
 
 [dependencies]
 axum = { version = "0.8.9", features = ["json", "macros"] }
-base64 = "0.22.1"
+base64 = "0.23.0"
 blake3 = "1.8.2"
 cap-std = "4.0.2"
 directories = "6.0.0"
@@ -27,7 +27,7 @@ fs2 = "0.4.3"
 http = "1.4.0"
 infer = "0.22.0"
 mime_guess = "2.0.5"
-rand = "0.9.2"
+rand = "0.10.2"
 rfd = "0.17.2"
 rusqlite = { version = "0.40.1", features = ["bundled", "modern_sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }

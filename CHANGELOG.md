@@ -3,6 +3,24 @@
 All notable user-facing changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Provider-neutral active-path export with a versioned JSON manifest, embedded
+  Markdown, reusable import prompt, exact pre-save estimates, and a native
+  macOS save dialog.
+- Round-trip coverage for message order, roles, timestamps, and branch
+  provenance, including regression checks that attachment names and branch
+  previews are excluded.
+
+### Security
+
+- Portable packages are created offline with opaque filenames and restrictive
+  file permissions. They exclude attachments, local paths, index metadata,
+  diagnostics, and session capabilities, and warn before private data crosses
+  into another provider.
+
 ## [0.1.1] - 2026-07-28
 
 ### Added

@@ -6,6 +6,7 @@ pub mod error;
 pub mod indexer;
 pub mod json_stream;
 pub mod models;
+pub mod portable_export;
 pub mod safe_root;
 pub mod server;
 pub mod store;

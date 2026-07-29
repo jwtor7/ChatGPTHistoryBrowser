@@ -6,6 +6,7 @@ import type {
   ConversationPage,
   ExportValidation,
   IndexProgress,
+  PortableExportEstimate,
 } from './types';
 
 const API_PREFIX = '/api/';
@@ -168,6 +169,24 @@ export class LocalApi {
   conversation(id: string, leaf?: string): Promise<ConversationDetail> {
     const suffix = leaf ? `?leaf=${encodeURIComponent(leaf)}` : '';
     return this.request(`/api/conversations/${encodeURIComponent(id)}${suffix}`);
+  }
+
+  portableExportEstimate(id: string, leaf?: string): Promise<PortableExportEstimate> {
+    const suffix = leaf ? `?leaf=${encodeURIComponent(leaf)}` : '';
+    return this.request(
+      `/api/conversations/${encodeURIComponent(id)}/portable-export${suffix}`,
+    );
+  }
+
+  savePortableExport(id: string, leaf?: string): Promise<{ saved: boolean }> {
+    const suffix = leaf ? `?leaf=${encodeURIComponent(leaf)}` : '';
+    return this.request(
+      `/api/conversations/${encodeURIComponent(id)}/portable-export${suffix}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      },
+    );
   }
 
   attachmentContent(id: string, signal?: AbortSignal): Promise<Blob> {
