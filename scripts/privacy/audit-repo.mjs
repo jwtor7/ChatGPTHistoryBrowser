@@ -158,10 +158,14 @@ function containsControlCharacter(value) {
 }
 
 function isReservedEmail(email) {
+  const normalizedEmail = email.toLowerCase();
   const separator = email.lastIndexOf('@');
   if (separator === -1) return false;
   const domain = email.slice(separator + 1).toLowerCase();
   return (
+    domain === 'users.noreply.github.com' ||
+    normalizedEmail === 'noreply@github.com' ||
+    normalizedEmail === 'support@github.com' ||
     domain === 'example.com' ||
     domain.endsWith('.example.com') ||
     domain === 'example.org' ||

@@ -36,6 +36,15 @@ test('accepts reserved-domain synthetic addresses', () => {
   assert.deepEqual(scanBufferContent(Buffer.from('fictional.person@example.invalid')), []);
 });
 
+test('accepts GitHub platform no-reply and bot addresses', () => {
+  assert.deepEqual(
+    scanBufferContent(Buffer.from('49699333+dependabot[bot]@users.noreply.github.com')),
+    [],
+  );
+  assert.deepEqual(scanBufferContent(Buffer.from('noreply@github.com')), []);
+  assert.deepEqual(scanBufferContent(Buffer.from('support@github.com')), []);
+});
+
 test('accepts conventional density-scaled image filenames', () => {
   assert.deepEqual(scanBufferContent(Buffer.from('AppIcon-20x20@3x.png')), []);
   assert.deepEqual(scanBufferContent(Buffer.from('AppIcon-512@2x.png')), []);
