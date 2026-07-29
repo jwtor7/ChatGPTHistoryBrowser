@@ -160,12 +160,12 @@ describe('History Browser frontend', () => {
       matchPreview: null,
     }));
 
-    function detail(branch = false): ConversationDetail {
+    function detail(branch = false, item: ConversationListItem = items[0]): ConversationDetail {
       return {
-        id: items[0].id,
-        title: items[0].title,
-        createdAt: items[0].createdAt,
-        updatedAt: items[0].updatedAt,
+        id: item.id,
+        title: item.title,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
         archived: false,
         starred: true,
         selectedLeaf: branch ? 'synthetic-branch-leaf' : 'synthetic-main-leaf',
@@ -174,7 +174,7 @@ describe('History Browser frontend', () => {
           {
             nodeId: branch ? 'synthetic-node-branch' : 'synthetic-node-main',
             role: branch ? 'assistant' : 'user',
-            createdAt: items[0].createdAt,
+            createdAt: item.createdAt,
             contentType: 'text',
             text: branch
               ? 'This is the conspicuously fictional alternate branch.'
@@ -196,6 +196,10 @@ describe('History Browser frontend', () => {
 
     const requestedUrls: string[] = [];
     let portableSaveCalls = 0;
+    let resolvePortableEstimate: ((response: Response) => void) | undefined;
+    const portableEstimateResponse = new Promise<Response>((resolve) => {
+      resolvePortableEstimate = resolve;
+    });
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = urlOf(input);
@@ -211,7 +215,18 @@ describe('History Browser frontend', () => {
           if (params.get('search') === 'fictional atlas') {
             return Promise.resolve(
               json({
-                items: [items[0]],
+                items: [items[0], items[1]],
+                page: 0,
+                pageSize: 50,
+                total: 2,
+                hasMore: false,
+              }),
+            );
+          }
+          if (params.get('search') === 'switch target') {
+            return Promise.resolve(
+              json({
+                items: [items[1]],
                 page: 0,
                 pageSize: 50,
                 total: 1,
@@ -234,14 +249,7 @@ describe('History Browser frontend', () => {
             portableSaveCalls += 1;
             return Promise.resolve(json({ saved: false }));
           }
-          return Promise.resolve(
-            json({
-              conversationCount: 1,
-              messageCount: 1,
-              attachmentCount: 0,
-              byteSize: 2_048,
-            }),
-          );
+          return portableEstimateResponse;
         }
         if (url.includes('?leaf=synthetic-branch-leaf')) {
           return Promise.resolve(json(detail(true)));
@@ -250,7 +258,10 @@ describe('History Browser frontend', () => {
           return Promise.resolve(json(detail()));
         }
         if (url.startsWith('/api/conversations/')) {
-          return Promise.resolve(json(detail()));
+          const item =
+            items.find((candidate) => url.startsWith(`/api/conversations/${candidate.id}`)) ??
+            items[0];
+          return Promise.resolve(json(detail(false, item)));
         }
         return Promise.reject(new Error(`Unexpected synthetic request: ${url}`));
       },
@@ -304,10 +315,26 @@ describe('History Browser frontend', () => {
     expect(await screen.findByText(/conspicuously fictional alternate branch/i)).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: /export active path/i }));
+    await waitFor(() => {
+      expect(requestedUrls.some((url) => url.includes('/portable-export'))).toBe(true);
+    });
+    await user.clear(search);
+    await user.type(search, 'switch target');
+    await user.click(screen.getByRole('button', { name: /^search$/i }));
+    expect(await screen.findByRole('heading', { name: items[1].title })).toBeVisible();
+    resolvePortableEstimate?.(
+      json({
+        conversationCount: 1,
+        messageCount: 1,
+        attachmentCount: 0,
+        byteSize: 2_048,
+      }),
+    );
     const exportDialog = await screen.findByRole('dialog', {
       name: /export this active path/i,
     });
     expect(exportDialog).toHaveTextContent(/provider-neutral json package/i);
+    expect(exportDialog).toHaveTextContent(items[0].title);
     expect(exportDialog).toHaveTextContent(/2\.0 KB/i);
     expect(exportDialog).toHaveTextContent(/0 detected, none included/i);
     await user.click(

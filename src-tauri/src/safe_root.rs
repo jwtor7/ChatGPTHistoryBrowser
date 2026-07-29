@@ -217,10 +217,38 @@ impl SafeExportRoot {
     }
 
     pub fn write_destination_is_outside_root(&self, destination: &Path) -> bool {
-        destination
+        let Some(parent) = destination
             .parent()
             .and_then(|parent| fs::canonicalize(parent).ok())
-            .is_some_and(|parent| !parent.starts_with(&self.canonical))
+        else {
+            return false;
+        };
+
+        #[cfg(unix)]
+        {
+            use cap_std::fs::MetadataExt as CapMetadataExt;
+            use std::os::unix::fs::MetadataExt as StdMetadataExt;
+
+            let Ok(selected) = self.directory.dir_metadata() else {
+                return false;
+            };
+            for ancestor in parent.ancestors() {
+                let Ok(candidate) = fs::metadata(ancestor) else {
+                    return false;
+                };
+                if CapMetadataExt::dev(&selected) == StdMetadataExt::dev(&candidate)
+                    && CapMetadataExt::ino(&selected) == StdMetadataExt::ino(&candidate)
+                {
+                    return false;
+                }
+            }
+            true
+        }
+
+        #[cfg(not(unix))]
+        {
+            !parent.starts_with(&self.canonical)
+        }
     }
 
     pub fn opaque_cache_key(&self) -> String {
@@ -500,12 +528,12 @@ mod tests {
     #[test]
     fn write_destinations_cannot_modify_the_selected_root() {
         let directory = TempDir::new().expect("temp directory");
-        fs::write(directory.path().join("conversations-000.json"), b"[]").expect("write shard");
-        let root = SafeExportRoot::select(directory.path()).expect("valid export");
+        let selected = directory.path().join("selected");
+        fs::create_dir(&selected).expect("create selected root");
+        fs::write(selected.join("conversations-000.json"), b"[]").expect("write shard");
+        let root = SafeExportRoot::select(&selected).expect("valid export");
 
-        assert!(
-            !root.write_destination_is_outside_root(&directory.path().join("portable.json"))
-        );
+        assert!(!root.write_destination_is_outside_root(&selected.join("portable.json")));
         assert!(
             root.write_destination_is_outside_root(
                 directory
@@ -516,5 +544,9 @@ mod tests {
                     .as_path()
             )
         );
+
+        let moved = directory.path().join("moved");
+        fs::rename(&selected, &moved).expect("move selected root");
+        assert!(!root.write_destination_is_outside_root(&moved.join("portable.json")));
     }
 }

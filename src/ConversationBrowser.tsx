@@ -309,6 +309,11 @@ export function ConversationBrowser({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmExport, setConfirmExport] = useState(false);
   const [exportEstimate, setExportEstimate] = useState<PortableExportEstimate | null>(null);
+  const [exportTarget, setExportTarget] = useState<{
+    id: string;
+    leaf?: string;
+    title: string;
+  } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
@@ -561,15 +566,18 @@ export function ConversationBrowser({
 
   async function preparePortableExport() {
     if (!detail) return;
+    const target = {
+      id: detail.id,
+      leaf: detail.selectedLeaf ?? undefined,
+      title: detail.title || 'Untitled conversation',
+    };
     setExportBusy(true);
     setExportError(null);
     setExportStatus(null);
     try {
-      const estimate = await api.portableExportEstimate(
-        detail.id,
-        detail.selectedLeaf ?? undefined,
-      );
+      const estimate = await api.portableExportEstimate(target.id, target.leaf);
       setExportEstimate(estimate);
+      setExportTarget(target);
       setConfirmExport(true);
     } catch (error) {
       setExportError(safeMessage(error));
@@ -584,11 +592,11 @@ export function ConversationBrowser({
   }
 
   async function savePortableExport() {
-    if (!detail) return;
+    if (!exportTarget) return;
     setExportBusy(true);
     setExportError(null);
     try {
-      const result = await api.savePortableExport(detail.id, detail.selectedLeaf ?? undefined);
+      const result = await api.savePortableExport(exportTarget.id, exportTarget.leaf);
       setConfirmExport(false);
       setExportStatus(
         result.saved
@@ -1003,7 +1011,7 @@ export function ConversationBrowser({
           </section>
         </div>
       ) : null}
-      {confirmExport && exportEstimate ? (
+      {confirmExport && exportEstimate && exportTarget ? (
         <div
           className="modal-backdrop"
           role="presentation"
@@ -1025,8 +1033,9 @@ export function ConversationBrowser({
             <h2 id="export-title">Export this active path?</h2>
             <p id="export-description">
               This creates a plaintext, provider-neutral JSON package with readable Markdown.
-              Saving it does not upload anything, but sharing or importing it transfers the
-              selected private conversation under the destination provider&apos;s policies.
+              The confirmed package is bound to <strong>{exportTarget.title}</strong>. Saving it
+              does not upload anything, but sharing or importing it transfers the selected
+              private conversation under the destination provider&apos;s policies.
             </p>
             <dl className="export-estimate">
               <div>

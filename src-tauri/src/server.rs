@@ -201,9 +201,8 @@ pub fn spawn_loopback(
 }
 
 fn build_router(state: ServerState, web_root: PathBuf) -> Router {
-    let api = Router::new()
+    let bounded_api = Router::new()
         .route("/api/status", get(status))
-        .route("/api/export/pick", post(pick_export))
         .route("/api/index/start", post(start_index))
         .route("/api/index/cancel", post(cancel_index))
         .route("/api/index/discard", post(discard_index))
@@ -212,12 +211,24 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
         .route("/api/conversations/{id}", get(get_conversation))
         .route(
             "/api/conversations/{id}/portable-export",
-            get(portable_export_estimate).post(save_portable_export),
+            get(portable_export_estimate),
         )
         .route("/api/attachments/{id}/content", get(attachment_content))
         .route("/api/attachments/{id}/text", get(attachment_text))
+        .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ));
+    let interactive_api = Router::new()
+        .route("/api/export/pick", post(pick_export))
+        .route(
+            "/api/conversations/{id}/portable-export",
+            post(save_portable_export),
+        )
         .route("/api/attachments/{id}/save", post(save_attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api));
+    let api = bounded_api.merge(interactive_api);
     let static_files = ServeDir::new(web_root.clone())
         .append_index_html_on_directories(true)
         .fallback(ServeFile::new(web_root.join("index.html")));
@@ -226,10 +237,6 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
         .merge(api)
         .fallback_service(static_files)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            REQUEST_TIMEOUT,
-        ))
         .layer(middleware::from_fn(security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), enforce_host))
         .with_state(state)
