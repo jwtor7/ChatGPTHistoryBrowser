@@ -196,10 +196,19 @@ describe('History Browser frontend', () => {
 
     const requestedUrls: string[] = [];
     let exportSaveCalls = 0;
+    let holdFirstPdfEstimate = true;
+    let initialExportEstimateReady = false;
     let resolveInitialExportEstimate: ((response: Response) => void) | undefined;
     const initialExportEstimateResponse = new Promise<Response>((resolve) => {
       resolveInitialExportEstimate = resolve;
     });
+    const initialExportEstimate = {
+      conversationCount: 1,
+      messageCount: 1,
+      attachmentCount: 0,
+      byteSize: 2_048,
+      fileName: `${items[0].title.replaceAll(' ', '-')}.md`,
+    };
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = urlOf(input);
@@ -261,7 +270,21 @@ describe('History Browser frontend', () => {
             exportSaveCalls += 1;
             return Promise.resolve(json({ saved: false }));
           }
-          if (format === 'md') return initialExportEstimateResponse;
+          if (format === 'md') {
+            return initialExportEstimateReady
+              ? Promise.resolve(json(initialExportEstimate))
+              : initialExportEstimateResponse;
+          }
+          if (format === 'pdf' && holdFirstPdfEstimate) {
+            holdFirstPdfEstimate = false;
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              );
+            });
+          }
           return Promise.resolve(
             json({
               conversationCount: 1,
@@ -316,7 +339,7 @@ describe('History Browser frontend', () => {
     await waitFor(() => {
       expect(container.querySelector('.result-summary')).toHaveTextContent('120 conversations');
     });
-    await user.click(screen.getByRole('button', { name: /clear filters/i }));
+    await user.click(screen.getByRole('button', { name: /clear search and filters/i }));
     await waitFor(() => {
       expect(
         requestedUrls.filter((url) => url.startsWith('/api/conversations?')).length,
@@ -345,28 +368,26 @@ describe('History Browser frontend', () => {
     await user.click(screen.getByRole('button', { name: /branch 1/i }));
     expect(await screen.findByText(/conspicuously fictional alternate branch/i)).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: /export conversation/i }));
+    await user.click(screen.getByRole('button', { name: /export current path/i }));
+    const exportDialog = await screen.findByRole('dialog', {
+      name: new RegExp(`export.*${items[0].title}`, 'i'),
+    });
+    expect(within(exportDialog).getByRole('button', { name: /cancel/i })).toBeEnabled();
+    expect(exportDialog).toHaveTextContent(/preparing filename/i);
     await waitFor(() => {
       expect(
         requestedUrls.some((url) => url.includes('/export?') && url.includes('format=md')),
       ).toBe(true);
     });
-    resolveInitialExportEstimate?.(
-      json({
-        conversationCount: 1,
-        messageCount: 1,
-        attachmentCount: 0,
-        byteSize: 2_048,
-        fileName: `${items[0].title.replaceAll(' ', '-')}.md`,
-      }),
-    );
-    const exportDialog = await screen.findByRole('dialog', {
-      name: new RegExp(`export.*${items[0].title}`, 'i'),
-    });
+    initialExportEstimateReady = true;
+    resolveInitialExportEstimate?.(json(initialExportEstimate));
     expect(exportDialog).toHaveTextContent(/contains private conversation data/i);
     expect(exportDialog).toHaveTextContent(/filename uses the conversation title/i);
     expect(exportDialog).toHaveTextContent(/sharing or importing the saved file/i);
-    expect(exportDialog).toHaveTextContent(/attachments aren.t included/i);
+    expect(exportDialog).toHaveTextContent(
+      /only the currently selected message path is included/i,
+    );
+    expect(exportDialog).toHaveTextContent(/alternate branches and attachments aren.t/i);
     expect(exportDialog).not.toHaveTextContent(/provider-neutral|portable json/i);
     await waitFor(() =>
       expect(within(exportDialog).getByRole('radio', { name: /markdown/i })).toHaveFocus(),
@@ -377,11 +398,23 @@ describe('History Browser frontend', () => {
     expect(exportDialog).toHaveTextContent(/2\.0 KB/i);
     expect(exportDialog).toHaveTextContent(/0 found, none included/i);
     await user.click(within(exportDialog).getByRole('radio', { name: /^pdf/i }));
+    expect(within(exportDialog).getByRole('button', { name: /cancel/i })).toBeEnabled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(exportDialog).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent(/export cancelled/i);
+
+    await user.click(screen.getByRole('button', { name: /export current path/i }));
+    const reopenedExportDialog = await screen.findByRole('dialog', {
+      name: new RegExp(`export.*${items[0].title}`, 'i'),
+    });
+    await user.click(within(reopenedExportDialog).getByRole('radio', { name: /^pdf/i }));
     expect(
-      await within(exportDialog).findByText(`${items[0].title.replaceAll(' ', '-')}.pdf`),
+      await within(reopenedExportDialog).findByText(
+        `${items[0].title.replaceAll(' ', '-')}.pdf`,
+      ),
     ).toBeVisible();
     expect(requestedUrls.some((url) => url.includes('/export?format=pdf'))).toBe(true);
-    await user.click(within(exportDialog).getByRole('button', { name: /save pdf/i }));
+    await user.click(within(reopenedExportDialog).getByRole('button', { name: /save pdf/i }));
     expect(await screen.findByRole('status')).toHaveTextContent(
       /export cancelled.*no file was created/i,
     );

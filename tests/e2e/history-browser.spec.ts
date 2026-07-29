@@ -316,7 +316,7 @@ test('production build browses safely with same-origin mocked APIs only', async 
     )
     .toBe(true);
   await expect(page.getByText(/1 active.*audio/i)).toBeVisible();
-  await page.getByRole('button', { name: /clear filters/i }).click();
+  await page.getByRole('button', { name: /clear search and filters/i }).click();
 
   if (process.env.GENERATE_SYNTHETIC_SCREENSHOT === '1') {
     await page.waitForTimeout(800);
@@ -333,11 +333,14 @@ test('production build browses safely with same-origin mocked APIs only', async 
   await page.getByRole('button', { name: /branch 1/i }).click();
   await expect(page.getByText(/alternate path is conspicuously fictional/i)).toBeVisible();
 
-  await page.getByRole('button', { name: /export conversation/i }).click();
+  await page.getByRole('button', { name: /export current path/i }).click();
   const exportDialog = page.getByRole('dialog', { name: /export.*fictional lantern atlas 1/i });
   await expect(exportDialog).toBeVisible();
   await expect(exportDialog.getByText(/contains private conversation data/i)).toBeVisible();
   await expect(exportDialog.getByText(/filename uses the conversation title/i)).toBeVisible();
+  await expect(
+    exportDialog.getByText(/only the currently selected message path/i),
+  ).toBeVisible();
   await expect(exportDialog.getByText(/sharing or importing the saved file/i)).toBeVisible();
   await expect(exportDialog.getByText('Fictional-Lantern-Atlas-1.md')).toBeVisible();
   await expect(exportDialog.getByRole('radio', { name: /markdown/i })).toBeFocused();
@@ -378,6 +381,7 @@ test('mobile layout opens a conversation and returns to the virtualized list', a
   await page.goto(`/#token=${TOKEN}`);
 
   await expect(page.getByRole('list', { name: /conversations/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /rebuild index/i })).toBeVisible();
   await page
     .locator('.conversation-row')
     .filter({ has: page.getByText(ITEMS[0].title, { exact: true }) })
@@ -386,7 +390,7 @@ test('mobile layout opens a conversation and returns to the virtualized list', a
   await expect(page.getByRole('heading', { name: ITEMS[0].title })).toBeVisible();
   await expect(page.getByRole('button', { name: /conversations/i })).toBeVisible();
 
-  await page.getByRole('button', { name: /export conversation/i }).click();
+  await page.getByRole('button', { name: /export current path/i }).click();
   const exportDialog = page.getByRole('dialog', {
     name: /export.*fictional lantern atlas 1/i,
   });

@@ -5,6 +5,8 @@ All notable user-facing changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Added
 
 - Conversation export in Markdown, PDF, and plain text with title-based
@@ -13,7 +15,10 @@ All notable user-facing changes are documented here. This project follows
 - Detected file-type filters for images, audio, video, PDFs, text,
   other/unsupported files, and missing attachments.
 - Regression coverage for export formatting, filename sanitization, attachment
-  extension repair, file-type queries, keyboard focus, and save cancellation.
+  extension repair, file-type queries, keyboard focus, estimate cancellation,
+  and save cancellation.
+- A concise `AGENTS.md` contributor guide covering repository structure,
+  development commands, conventions, tests, and pull requests.
 
 ### Changed
 
@@ -22,16 +27,22 @@ All notable user-facing changes are documented here. This project follows
   privacy-safe product screenshots.
 - Attachment cards now show a useful detected type and a visible **Save copy**
   action.
+- Export UI now identifies the selected message path explicitly, remains
+  dismissible while estimating a document, and wraps long exact filenames
+  instead of truncating them.
 
 ### Fixed
 
 - Attachment copies now receive a meaningful sanitized filename and an
   extension derived from detected content, including generic WAV attachments
-  that previously saved as extensionless `Attachment`.
+  that previously saved as extensionless `Attachment`, plus GIF, WebP, and
+  FLAC files.
 - Conversation exports no longer use opaque
   `context-….portable.json` filenames.
 - PDF export now uses native Unicode text shaping so non-Latin scripts and
   emoji are preserved instead of being replaced with question marks.
+- Markdown export preserves literal content inside inline and fenced code while
+  continuing to neutralize active HTML and remote resources outside code.
 - Confirmed file replacement now uses a private temporary file and atomic
   rename rather than failing when the destination already exists.
 
@@ -45,6 +56,8 @@ All notable user-facing changes are documented here. This project follows
   all text formats visibly encode terminal control characters.
 - Attachment copies use a passive detected extension; unknown content uses
   `.bin` instead of restoring an executable source suffix.
+- PDF generation is size-bounded and serialized to prevent concurrent exports
+  from exhausting native rendering resources.
 
 ## [0.1.1] - 2026-07-28
 
@@ -88,4 +101,6 @@ All notable user-facing changes are documented here. This project follows
   and loopback-only, and packaged artifacts are scanned for prohibited private
   data before release.
 
+[Unreleased]: https://github.com/jwtor7/ChatGPTHistoryBrowser/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jwtor7/ChatGPTHistoryBrowser/releases/tag/v0.2.0
 [0.1.1]: https://github.com/jwtor7/ChatGPTHistoryBrowser/releases/tag/v0.1.1

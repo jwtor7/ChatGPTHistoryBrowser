@@ -179,11 +179,13 @@ export class LocalApi {
     id: string,
     format: ConversationExportFormat,
     leaf?: string,
+    signal?: AbortSignal,
   ): Promise<ConversationExportEstimate> {
     const query = new URLSearchParams({ format });
     if (leaf) query.set('leaf', leaf);
     return this.request(
       `/api/conversations/${encodeURIComponent(id)}/export?${query.toString()}`,
+      { signal },
     );
   }
 

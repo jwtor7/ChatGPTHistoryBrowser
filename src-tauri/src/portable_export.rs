@@ -7,7 +7,8 @@ use crate::{
 
 const MAX_CONVERSATION_EXPORT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FILE_STEM_BYTES: usize = 96;
-const MAX_PDF_PAGES: usize = 10_000;
+const MAX_PDF_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PDF_PAGES: usize = 2_000;
 
 const PRIVACY_NOTICE: &str = "This document contains private conversation data. \
 Uploading or sharing it transfers that data under the destination provider's policies.";
@@ -268,6 +269,7 @@ fn render_pdf(detail: &ConversationDetail, attachment_count: usize) -> AppResult
     const FONT_SIZE: f64 = 10.0;
 
     let plain_text = render_plain_text(detail, attachment_count)?;
+    ensure_pdf_text_length(plain_text.len())?;
     let string = CFString::from_str(&plain_text);
     // SAFETY: These Core Text wrappers call Apple framework APIs with retained
     // Core Foundation values and documented nullable optional arguments.
@@ -369,6 +371,13 @@ fn checked_export_len(current: usize, additional: usize) -> AppResult<usize> {
     Ok(length)
 }
 
+fn ensure_pdf_text_length(length: usize) -> AppResult<()> {
+    if length > MAX_PDF_TEXT_BYTES {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+    Ok(())
+}
+
 fn append_bounded(output: &mut String, value: &str) -> AppResult<()> {
     checked_export_len(output.len(), value.len())?;
     output.push_str(value);
@@ -430,7 +439,37 @@ fn markdown_inline(value: &str) -> String {
 }
 
 fn sanitize_markdown_export_text(value: &str) -> AppResult<String> {
-    sanitize_export_text(value, true)
+    let mut output = String::new();
+    let mut remainder = value;
+    let mut fence: Option<(u8, usize)> = None;
+
+    while !remainder.is_empty() {
+        let (raw_line, has_newline, next) = if let Some(index) = remainder.find('\n') {
+            (&remainder[..index], true, &remainder[index + 1..])
+        } else {
+            (remainder, false, "")
+        };
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+
+        if let Some((marker, minimum_length)) = fence {
+            append_sanitized_text(&mut output, line, false)?;
+            if is_markdown_closing_fence(line, marker, minimum_length) {
+                fence = None;
+            }
+        } else if let Some((marker, length)) = markdown_opening_fence(line) {
+            append_sanitized_text(&mut output, line, false)?;
+            fence = Some((marker, length));
+        } else {
+            append_markdown_inline_text(&mut output, line)?;
+        }
+
+        if has_newline {
+            append_bounded(&mut output, "\n")?;
+        }
+        remainder = next;
+    }
+
+    Ok(output)
 }
 
 fn sanitize_plain_export_text(value: &str) -> AppResult<String> {
@@ -439,6 +478,11 @@ fn sanitize_plain_export_text(value: &str) -> AppResult<String> {
 
 fn sanitize_export_text(value: &str, markdown: bool) -> AppResult<String> {
     let mut output = String::new();
+    append_sanitized_text(&mut output, value, markdown)?;
+    Ok(output)
+}
+
+fn append_sanitized_text(output: &mut String, value: &str, markdown: bool) -> AppResult<()> {
     let mut characters = value.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
@@ -446,21 +490,105 @@ fn sanitize_export_text(value: &str, markdown: bool) -> AppResult<String> {
                 if characters.peek() == Some(&'\n') {
                     characters.next();
                 }
-                append_bounded(&mut output, "\n")?;
+                append_bounded(output, "\n")?;
             }
-            '\n' | '\t' => append_export_character(&mut output, character)?,
+            '\n' | '\t' => append_export_character(output, character)?,
             value if value.is_control() => {
-                append_bounded(&mut output, &format!("[U+{:04X}]", u32::from(value)))?;
+                append_bounded(output, &format!("[U+{:04X}]", u32::from(value)))?;
             }
-            '&' if markdown => append_bounded(&mut output, "&amp;")?,
-            '<' if markdown => append_bounded(&mut output, "&lt;")?,
-            '>' if markdown => append_bounded(&mut output, "&gt;")?,
-            '[' if markdown => append_bounded(&mut output, "&#91;")?,
-            ']' if markdown => append_bounded(&mut output, "&#93;")?,
-            value => append_export_character(&mut output, value)?,
+            '&' if markdown => append_bounded(output, "&amp;")?,
+            '<' if markdown => append_bounded(output, "&lt;")?,
+            '>' if markdown => append_bounded(output, "&gt;")?,
+            '[' if markdown => append_bounded(output, "&#91;")?,
+            ']' if markdown => append_bounded(output, "&#93;")?,
+            value => append_export_character(output, value)?,
         }
     }
-    Ok(output)
+    Ok(())
+}
+
+fn markdown_fence_run(line: &str) -> Option<(u8, usize, usize)> {
+    let bytes = line.as_bytes();
+    let indent = bytes.iter().take_while(|byte| **byte == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let marker = *bytes.get(indent)?;
+    if !matches!(marker, b'`' | b'~') {
+        return None;
+    }
+    let length = bytes[indent..]
+        .iter()
+        .take_while(|byte| **byte == marker)
+        .count();
+    (length >= 3).then_some((marker, length, indent + length))
+}
+
+fn markdown_opening_fence(line: &str) -> Option<(u8, usize)> {
+    markdown_fence_run(line).and_then(|(marker, length, end)| {
+        (marker != b'`' || !line[end..].contains('`')).then_some((marker, length))
+    })
+}
+
+fn is_markdown_closing_fence(line: &str, marker: u8, minimum_length: usize) -> bool {
+    markdown_fence_run(line).is_some_and(|(candidate, length, end)| {
+        candidate == marker
+            && length >= minimum_length
+            && line[end..].bytes().all(|byte| matches!(byte, b' ' | b'\t'))
+    })
+}
+
+fn append_markdown_inline_text(output: &mut String, line: &str) -> AppResult<()> {
+    let bytes = line.as_bytes();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        let Some(relative_open) = bytes[cursor..].iter().position(|byte| *byte == b'`') else {
+            append_sanitized_text(output, &line[cursor..], true)?;
+            break;
+        };
+        let open = cursor + relative_open;
+        append_sanitized_text(output, &line[cursor..open], true)?;
+        let delimiter_length = bytes[open..]
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        let content_start = open + delimiter_length;
+
+        if let Some((close, close_end)) =
+            find_matching_backtick_run(bytes, content_start, delimiter_length)
+        {
+            append_sanitized_text(output, &line[open..content_start], false)?;
+            append_sanitized_text(output, &line[content_start..close], false)?;
+            append_sanitized_text(output, &line[close..close_end], false)?;
+            cursor = close_end;
+        } else {
+            append_sanitized_text(output, &line[open..content_start], true)?;
+            cursor = content_start;
+        }
+    }
+
+    Ok(())
+}
+
+fn find_matching_backtick_run(
+    bytes: &[u8],
+    mut cursor: usize,
+    delimiter_length: usize,
+) -> Option<(usize, usize)> {
+    while cursor < bytes.len() {
+        let relative = bytes[cursor..].iter().position(|byte| *byte == b'`')?;
+        let start = cursor + relative;
+        let length = bytes[start..]
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        if length == delimiter_length {
+            return Some((start, start + length));
+        }
+        cursor = start + length;
+    }
+    None
 }
 
 fn append_export_character(output: &mut String, character: char) -> AppResult<()> {
@@ -648,6 +776,39 @@ mod tests {
     }
 
     #[test]
+    fn markdown_export_preserves_inline_and_fenced_code_verbatim() {
+        let mut detail = synthetic_detail();
+        detail.messages[0].text = concat!(
+            "Use `values[0] < limit && ready` here.\n\n",
+            "```rust\n",
+            "if values[0] < limit && ready {\n",
+            "    println!(\"<safe>\");\n",
+            "}\n",
+            "```\n\n",
+            "<img src=\"https://pixel.invalid/track.png\">"
+        )
+        .to_string();
+
+        let (markdown, _) =
+            serialize_conversation_export(&detail, ConversationExportFormat::Md)
+                .expect("markdown");
+        let markdown = String::from_utf8(markdown).expect("markdown utf8");
+
+        assert!(markdown.contains("`values[0] < limit && ready`"));
+        assert!(markdown.contains("if values[0] < limit && ready {"));
+        assert!(markdown.contains("println!(\"<safe>\");"));
+        assert!(markdown.contains("&lt;img src="));
+        assert!(!markdown.contains("<img src="));
+
+        let invalid_fence = sanitize_markdown_export_text(
+            "```invalid` info\n<img src=\"https://pixel.invalid/not-code.png\">",
+        )
+        .expect("invalid fence");
+        assert!(invalid_fence.contains("&lt;img src="));
+        assert!(!invalid_fence.contains("<img src="));
+    }
+
+    #[test]
     fn file_name_matches_exceptional_opportunity_scan_exactly() {
         assert_eq!(
             conversation_export_file_name(
@@ -814,6 +975,11 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::ResourceLimit);
         let overflow = checked_export_len(usize::MAX, 1).expect_err("usize overflow");
         assert_eq!(overflow.code(), ErrorCode::ResourceLimit);
+
+        ensure_pdf_text_length(MAX_PDF_TEXT_BYTES).expect("PDF text at limit");
+        let pdf_error =
+            ensure_pdf_text_length(MAX_PDF_TEXT_BYTES + 1).expect_err("PDF text over limit");
+        assert_eq!(pdf_error.code(), ErrorCode::ResourceLimit);
     }
 
     #[cfg(target_os = "macos")]

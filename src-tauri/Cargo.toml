@@ -1,6 +1,6 @@
 [package]
 name = "chatgpt-history-browser"
-version = "0.1.1"
+version = "0.2.0"
 description = "Privacy-first local browser for official ChatGPT data exports"
 edition = "2024"
 license = "MIT"

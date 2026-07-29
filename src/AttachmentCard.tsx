@@ -29,6 +29,7 @@ const MIME_ALLOWLIST = {
     'audio/ogg',
     'audio/wav',
     'audio/webm',
+    'audio/x-flac',
     'audio/x-m4a',
     'audio/x-wav',
   ]),
@@ -65,6 +66,7 @@ function formatAttachmentType(attachment: AttachmentView): string {
   const mime = attachment.detectedMime?.toLowerCase().split(';', 1)[0] ?? '';
   const labels: Record<string, string> = {
     'application/pdf': 'PDF document',
+    'application/zip': 'ZIP archive',
     'audio/aac': 'AAC audio',
     'audio/flac': 'FLAC audio',
     'audio/m4a': 'M4A audio',
@@ -73,6 +75,7 @@ function formatAttachmentType(attachment: AttachmentView): string {
     'audio/ogg': 'OGG audio',
     'audio/wav': 'WAV audio',
     'audio/webm': 'WebM audio',
+    'audio/x-flac': 'FLAC audio',
     'audio/x-m4a': 'M4A audio',
     'audio/x-wav': 'WAV audio',
     'image/jpeg': 'JPEG image',
@@ -465,7 +468,7 @@ export function AttachmentCard({
           <AttachmentIcon attachment={attachment} />
         </span>
         <span className="attachment-name">
-          <strong>{attachment.displayName}</strong>
+          <strong title={attachment.displayName}>{attachment.displayName}</strong>
           <span>
             {formatAttachmentType(attachment)} · {formatBytes(attachment.byteSize)}
           </span>

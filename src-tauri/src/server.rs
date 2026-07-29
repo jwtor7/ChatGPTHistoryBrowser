@@ -40,7 +40,8 @@ use tower_http::{
 
 use crate::{
     attachments::{
-        MAX_INLINE_MEDIA_BYTES, open_validated_preview, read_text_preview, safe_download_name,
+        MAX_INLINE_MEDIA_BYTES, open_validated_preview, read_text_preview,
+        safe_download_name_for_detected_type,
     },
     error::{AppError, AppResult, ErrorCode},
     indexer::{ArchiveSession, IndexCoordinator},
@@ -53,6 +54,7 @@ use crate::{
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_CONCURRENT_PREVIEWS: usize = 4;
+const MAX_CONCURRENT_PDF_EXPORTS: usize = 1;
 const PREVIEW_BUDGET_UNIT: u64 = 1024 * 1024;
 const PREVIEW_BUDGET_UNITS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -73,6 +75,7 @@ pub struct ServerState {
     indexer: IndexCoordinator,
     preview_slots: Arc<Semaphore>,
     preview_bytes: Arc<Semaphore>,
+    pdf_export_slots: Arc<Semaphore>,
     main_thread_dispatcher: Option<MainThreadDispatcher>,
 }
 
@@ -108,6 +111,7 @@ impl ServerState {
             indexer: IndexCoordinator::default(),
             preview_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_PREVIEWS)),
             preview_bytes: Arc::new(Semaphore::new(PREVIEW_BUDGET_UNITS)),
+            pdf_export_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_PDF_EXPORTS)),
             main_thread_dispatcher: None,
         }
     }
@@ -527,7 +531,20 @@ async fn build_conversation_export(
     format: ConversationExportFormat,
 ) -> AppResult<(Vec<u8>, ConversationExportEstimate)> {
     let store = state.session()?.store.clone();
+    let pdf_permit = if format == ConversationExportFormat::Pdf {
+        Some(
+            state
+                .pdf_export_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal)?,
+        )
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || {
+        let _pdf_permit = pdf_permit;
         let detail = store.conversation_detail(&id, selected_leaf.as_deref())?;
         serialize_conversation_export(&detail, format)
     })
@@ -723,9 +740,10 @@ async fn save_attachment(
         .main_thread_dispatcher
         .as_ref()
         .ok_or(AppError::Internal)?;
-    let download_name = safe_download_name(
+    let download_name = safe_download_name_for_detected_type(
         &record.display_name,
         validated.detected_mime.as_deref(),
+        validated.detected_extension.as_deref(),
         validated.preview_kind,
     );
     let required_extension = Path::new(&download_name)

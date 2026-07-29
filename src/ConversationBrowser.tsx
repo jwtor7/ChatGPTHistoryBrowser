@@ -11,6 +11,7 @@ import {
   Filter,
   MessageSquareText,
   Paperclip,
+  RefreshCw,
   Search,
   ShieldCheck,
   Star,
@@ -57,7 +58,7 @@ function attachmentKindLabel(kind: AttachmentKindFilter): string {
   if (kind === 'video') return 'Video';
   if (kind === 'pdf') return 'PDFs';
   if (kind === 'text') return 'Text files';
-  if (kind === 'other') return 'Other / unsupported';
+  if (kind === 'other') return 'Other files';
   if (kind === 'missing') return 'Missing files';
   return 'All file types';
 }
@@ -72,6 +73,15 @@ function safeMessage(error: unknown): string {
   return error instanceof ApiError
     ? error.message
     : 'The local application could not complete this request.';
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    error.name === 'AbortError'
+  );
 }
 
 function formatDate(timestamp: number | null, includeTime = false): string {
@@ -336,7 +346,8 @@ export function ConversationBrowser({
     leaf?: string;
     title: string;
   } | null>(null);
-  const [exportBusy, setExportBusy] = useState(false);
+  const [exportEstimating, setExportEstimating] = useState(false);
+  const [exportSaving, setExportSaving] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
@@ -350,16 +361,25 @@ export function ConversationBrowser({
   const exportDialogRef = useRef<HTMLElement>(null);
   const cancelExportRef = useRef<HTMLButtonElement>(null);
   const exportFormatRef = useRef<HTMLInputElement>(null);
+  const exportEstimateAbortRef = useRef<AbortController | null>(null);
   const actionBusyRef = useRef(actionBusy);
-  const exportBusyRef = useRef(exportBusy);
+  const exportSavingRef = useRef(exportSaving);
+  const exportBusy = exportEstimating || exportSaving;
 
   useEffect(() => {
     actionBusyRef.current = actionBusy;
   }, [actionBusy]);
 
   useEffect(() => {
-    exportBusyRef.current = exportBusy;
-  }, [exportBusy]);
+    exportSavingRef.current = exportSaving;
+  }, [exportSaving]);
+
+  useEffect(
+    () => () => {
+      exportEstimateAbortRef.current?.abort();
+    },
+    [],
+  );
 
   useEffect(() => {
     let active = true;
@@ -473,10 +493,9 @@ export function ConversationBrowser({
     const focusFrame = window.requestAnimationFrame(() => exportFormatRef.current?.focus());
 
     function handleDialogKeydown(event: KeyboardEvent) {
-      if (event.key === 'Escape' && !exportBusyRef.current) {
+      if (event.key === 'Escape' && !exportSavingRef.current) {
         event.preventDefault();
-        setConfirmExport(false);
-        setExportStatus('Export cancelled. No file was created.');
+        cancelConversationExport();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -616,48 +635,71 @@ export function ConversationBrowser({
     setExportTarget(target);
     setExportFormat(format);
     setExportEstimate(null);
-    setExportBusy(true);
+    setConfirmExport(true);
+    exportEstimateAbortRef.current?.abort();
+    const controller = new AbortController();
+    exportEstimateAbortRef.current = controller;
+    setExportEstimating(true);
     setExportError(null);
     setExportStatus(null);
     try {
-      const estimate = await api.conversationExportEstimate(target.id, format, target.leaf);
+      const estimate = await api.conversationExportEstimate(
+        target.id,
+        format,
+        target.leaf,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       setExportEstimate(estimate);
-      setConfirmExport(true);
     } catch (error) {
-      setExportError(safeMessage(error));
+      if (!isAbortError(error)) setExportError(safeMessage(error));
     } finally {
-      setExportBusy(false);
+      if (exportEstimateAbortRef.current === controller) {
+        exportEstimateAbortRef.current = null;
+        setExportEstimating(false);
+      }
     }
   }
 
   async function chooseExportFormat(format: ConversationExportFormat) {
     if (!exportTarget || (format === exportFormat && exportEstimate)) return;
+    exportEstimateAbortRef.current?.abort();
+    const controller = new AbortController();
+    exportEstimateAbortRef.current = controller;
     setExportFormat(format);
     setExportEstimate(null);
-    setExportBusy(true);
+    setExportEstimating(true);
     setExportError(null);
     try {
       const estimate = await api.conversationExportEstimate(
         exportTarget.id,
         format,
         exportTarget.leaf,
+        controller.signal,
       );
+      if (controller.signal.aborted) return;
       setExportEstimate(estimate);
     } catch (error) {
-      setExportError(safeMessage(error));
+      if (!isAbortError(error)) setExportError(safeMessage(error));
     } finally {
-      setExportBusy(false);
+      if (exportEstimateAbortRef.current === controller) {
+        exportEstimateAbortRef.current = null;
+        setExportEstimating(false);
+      }
     }
   }
 
   function cancelConversationExport() {
+    exportEstimateAbortRef.current?.abort();
+    exportEstimateAbortRef.current = null;
+    setExportEstimating(false);
     setConfirmExport(false);
     setExportStatus('Export cancelled. No file was created.');
   }
 
   async function saveConversationExport() {
     if (!exportTarget || !exportEstimate) return;
-    setExportBusy(true);
+    setExportSaving(true);
     setExportError(null);
     try {
       const result = await api.saveConversationExport(
@@ -674,7 +716,7 @@ export function ConversationBrowser({
     } catch (error) {
       setExportError(safeMessage(error));
     } finally {
-      setExportBusy(false);
+      setExportSaving(false);
     }
   }
 
@@ -713,8 +755,11 @@ export function ConversationBrowser({
               className="button button-quiet button-small"
               onClick={() => void rebuild()}
               disabled={actionBusy}
+              aria-label="Rebuild index"
+              title="Rebuild index"
             >
-              Rebuild index
+              <RefreshCw size={16} aria-hidden="true" />
+              <span className="rebuild-label">Rebuild index</span>
             </button>
             <button
               ref={discardTriggerRef}
@@ -837,7 +882,7 @@ export function ConversationBrowser({
                   <option value="video">Video</option>
                   <option value="pdf">PDFs</option>
                   <option value="text">Text files</option>
-                  <option value="other">Other / unsupported</option>
+                  <option value="other">Other files</option>
                   <option value="missing">Missing files</option>
                 </FilterSelect>
               </div>
@@ -856,7 +901,7 @@ export function ConversationBrowser({
                   setListRequestVersion((version) => version + 1);
                 }}
               >
-                Clear filters
+                Clear search and filters
               </button>
             </details>
           </div>
@@ -1023,7 +1068,7 @@ export function ConversationBrowser({
                     disabled={exportBusy}
                   >
                     <Download size={15} aria-hidden="true" />
-                    {exportBusy && !confirmExport ? 'Preparing…' : 'Export conversation…'}
+                    {exportBusy && !confirmExport ? 'Preparing…' : 'Export current path…'}
                   </button>
                   {exportStatus ? (
                     <span className="export-status" role="status">
@@ -1114,7 +1159,7 @@ export function ConversationBrowser({
           className="modal-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !exportBusyRef.current) {
+            if (event.target === event.currentTarget && !exportSavingRef.current) {
               cancelConversationExport();
             }
           }}
@@ -1132,8 +1177,9 @@ export function ConversationBrowser({
             <p id="export-description">
               This document contains private conversation data. Its suggested filename uses the
               conversation title and may appear in recent files or backups. Nothing is uploaded,
-              and attachments aren&apos;t included. Sharing or importing the saved file
-              transfers its conversation data to the destination.
+              and only the currently selected message path is included; alternate branches and
+              attachments aren&apos;t. Sharing or importing the saved file transfers its
+              conversation data to the destination.
             </p>
             <fieldset className="export-format">
               <legend>Format</legend>
@@ -1204,7 +1250,7 @@ export function ConversationBrowser({
                 type="button"
                 className="button button-quiet"
                 onClick={cancelConversationExport}
-                disabled={exportBusy}
+                disabled={exportSaving}
               >
                 Cancel
               </button>
@@ -1214,7 +1260,11 @@ export function ConversationBrowser({
                 onClick={() => void saveConversationExport()}
                 disabled={exportBusy || !exportEstimate}
               >
-                {exportBusy ? 'Preparing…' : `Save ${exportFormatLabel(exportFormat)}…`}
+                {exportSaving
+                  ? 'Opening save dialog…'
+                  : exportEstimating
+                    ? 'Preparing…'
+                    : `Save ${exportFormatLabel(exportFormat)}…`}
               </button>
             </div>
           </section>

@@ -22,6 +22,7 @@ pnpm-debug.log*
 .cache/
 .index/
 .indexes/
+.code-review-graph/
 .chatgpt-history-browser/
 *.db
 *.db-*

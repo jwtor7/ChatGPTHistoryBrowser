@@ -36,7 +36,8 @@ search index on your device.
 
 - Search years of conversations in milliseconds.
 - Filter by date, role, archive state, starred state, attachment presence, and
-  detected file type: images, audio, video, PDFs, text, other, or missing.
+  detected file type: images, audio, video, PDFs, text, other files, or
+  missing.
 - Read the active conversation path and recover alternate branches.
 - Export the active path as Markdown, PDF, or plain text with a readable
   title-based filename.
@@ -145,16 +146,17 @@ are replaced with the passive `.txt` extension.
 
 ## Conversation export
 
-Open a conversation and choose **Export conversation…**, then select Markdown,
+Open a conversation and choose **Export current path…**, then select Markdown,
 PDF, or plain text. The app shows the exact filename before saving. A title
 such as `**Exceptional Opportunity Scan` becomes
 `Exceptional-Opportunity-Scan.md`, `.pdf`, or `.txt`.
 
-The document contains the selected active path with message order, roles, and
-timestamps. The confirmation shows the exact serialized size and attachment
-count before the native macOS save dialog opens. Attachment bytes and names,
-local paths, internal identifiers, and session capabilities are excluded. The
-chosen extension is enforced even if the destination name is edited.
+The document contains only the selected message path, with message order,
+roles, and timestamps; alternate branches are not included. The confirmation
+shows the exact serialized size and attachment count before the native macOS
+save dialog opens. Attachment bytes and names, local paths, internal
+identifiers, and session capabilities are excluded. The chosen extension is
+enforced even if the destination name is edited.
 
 Export runs entirely on the device and makes no outbound request. The saved
 document contains private data. If you import or share it, the selected
