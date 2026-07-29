@@ -195,9 +195,9 @@ describe('History Browser frontend', () => {
     }
 
     const requestedUrls: string[] = [];
+    let portableSaveCalls = 0;
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-        void init;
         const url = urlOf(input);
         requestedUrls.push(url);
         if (url === '/api/status') {
@@ -226,6 +226,20 @@ describe('History Browser frontend', () => {
               pageSize: 50,
               total: 120,
               hasMore: true,
+            }),
+          );
+        }
+        if (url.startsWith(`/api/conversations/${items[0].id}/portable-export`)) {
+          if (init?.method === 'POST') {
+            portableSaveCalls += 1;
+            return Promise.resolve(json({ saved: false }));
+          }
+          return Promise.resolve(
+            json({
+              conversationCount: 1,
+              messageCount: 1,
+              attachmentCount: 0,
+              byteSize: 2_048,
             }),
           );
         }
@@ -288,6 +302,28 @@ describe('History Browser frontend', () => {
 
     await user.click(screen.getByRole('button', { name: /branch 1/i }));
     expect(await screen.findByText(/conspicuously fictional alternate branch/i)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: /export active path/i }));
+    const exportDialog = await screen.findByRole('dialog', {
+      name: /export this active path/i,
+    });
+    expect(exportDialog).toHaveTextContent(/provider-neutral json package/i);
+    expect(exportDialog).toHaveTextContent(/2\.0 KB/i);
+    expect(exportDialog).toHaveTextContent(/0 detected, none included/i);
+    await user.click(
+      within(exportDialog).getByRole('button', { name: /choose save location/i }),
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /export cancelled.*no file was created/i,
+    );
+    expect(portableSaveCalls).toBe(1);
+    expect(
+      requestedUrls.some(
+        (url) =>
+          url.includes('/portable-export?leaf=synthetic-branch-leaf') &&
+          url.startsWith('/api/'),
+      ),
+    ).toBe(true);
 
     const discardTrigger = screen.getByRole('button', { name: /delete local index/i });
     await user.click(discardTrigger);

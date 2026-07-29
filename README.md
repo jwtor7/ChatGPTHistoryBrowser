@@ -37,6 +37,7 @@ search index on your device.
 - Search years of conversations in milliseconds.
 - Filter by date, role, archive state, starred state, and attachments.
 - Read the active conversation path and recover alternate branches.
+- Export the active path as a provider-neutral, offline portable context package.
 - Preview supported local text, PDF, PNG, and JPEG attachments through a
   constrained loopback server.
 - Cancel and resume indexing.
@@ -133,6 +134,26 @@ Rust owns filesystem access, validation, parsing, indexing, and the local Axum
 server. The Tauri webview receives only projected conversation data through a
 per-launch capability token. Attachment paths and file signatures are
 revalidated before preview or save operations.
+
+## Portable context export
+
+Open a conversation and choose **Export active path** to save a local
+`.portable.json` package. The package includes:
+
+- a versioned provider-neutral manifest;
+- the selected active path with message order, roles, timestamps, and branch
+  provenance;
+- a readable Markdown rendering; and
+- a reusable prompt for importing the context carefully into another
+  assistant.
+
+The confirmation shows the exact package size and attachment count before the
+native macOS save dialog opens. Attachments are excluded, local paths and
+session capabilities are never included, and the app does not upload the
+package or claim provider-specific compatibility.
+
+The saved package is plaintext private data. If you import or share it, the
+selected conversation becomes subject to the destination provider’s policies.
 
 ## Build from source
 

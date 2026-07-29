@@ -216,6 +216,13 @@ impl SafeExportRoot {
         !candidate.starts_with(&self.canonical) && !self.canonical.starts_with(&candidate)
     }
 
+    pub fn write_destination_is_outside_root(&self, destination: &Path) -> bool {
+        destination
+            .parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .is_some_and(|parent| !parent.starts_with(&self.canonical))
+    }
+
     pub fn opaque_cache_key(&self) -> String {
         blake3::hash(self.canonical.as_os_str().as_encoded_bytes())
             .to_hex()
@@ -488,5 +495,26 @@ mod tests {
             .expect("open shard");
         file.write_all(b" ").expect("change shard");
         assert!(!root.remains_unchanged(&baseline));
+    }
+
+    #[test]
+    fn write_destinations_cannot_modify_the_selected_root() {
+        let directory = TempDir::new().expect("temp directory");
+        fs::write(directory.path().join("conversations-000.json"), b"[]").expect("write shard");
+        let root = SafeExportRoot::select(directory.path()).expect("valid export");
+
+        assert!(
+            !root.write_destination_is_outside_root(&directory.path().join("portable.json"))
+        );
+        assert!(
+            root.write_destination_is_outside_root(
+                directory
+                    .path()
+                    .parent()
+                    .expect("outside parent")
+                    .join("portable.json")
+                    .as_path()
+            )
+        );
     }
 }

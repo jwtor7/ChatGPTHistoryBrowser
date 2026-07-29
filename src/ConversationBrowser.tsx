@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  Download,
   FileStack,
   Filter,
   MessageSquareText,
@@ -28,6 +29,7 @@ import type {
   ConversationListItem,
   ConversationPage,
   MessageView,
+  PortableExportEstimate,
 } from './types';
 
 const PAGE_SIZE = 50;
@@ -60,6 +62,19 @@ function formatDate(timestamp: number | null, includeTime = false): string {
     dateStyle: 'medium',
     ...(includeTime ? { timeStyle: 'short' as const } : {}),
   }).format(date);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return 'Size unavailable';
+  if (bytes < 1_024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1_024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1_024; index += 1) {
+    value /= 1_024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 function roleDetails(role: string): { className: string; label: string } {
@@ -292,6 +307,11 @@ export function ConversationBrowser({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmExport, setConfirmExport] = useState(false);
+  const [exportEstimate, setExportEstimate] = useState<PortableExportEstimate | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [listRequestVersion, setListRequestVersion] = useState(0);
   const [detailRequestVersion, setDetailRequestVersion] = useState(0);
@@ -299,11 +319,19 @@ export function ConversationBrowser({
   const discardTriggerRef = useRef<HTMLButtonElement>(null);
   const discardDialogRef = useRef<HTMLElement>(null);
   const keepIndexRef = useRef<HTMLButtonElement>(null);
+  const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportDialogRef = useRef<HTMLElement>(null);
+  const cancelExportRef = useRef<HTMLButtonElement>(null);
   const actionBusyRef = useRef(actionBusy);
+  const exportBusyRef = useRef(exportBusy);
 
   useEffect(() => {
     actionBusyRef.current = actionBusy;
   }, [actionBusy]);
+
+  useEffect(() => {
+    exportBusyRef.current = exportBusy;
+  }, [exportBusy]);
 
   useEffect(() => {
     let active = true;
@@ -408,6 +436,49 @@ export function ConversationBrowser({
     };
   }, [confirmDiscard]);
 
+  useEffect(() => {
+    if (!confirmExport) return;
+
+    const trigger = exportTriggerRef.current;
+    const shell = shellRef.current;
+    if (shell) shell.inert = true;
+    const focusFrame = window.requestAnimationFrame(() => cancelExportRef.current?.focus());
+
+    function handleDialogKeydown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !exportBusyRef.current) {
+        event.preventDefault();
+        setConfirmExport(false);
+        setExportStatus('Export cancelled. No file was created.');
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const focusable = Array.from(
+        exportDialogRef.current?.querySelectorAll<HTMLButtonElement>(
+          'button:not([disabled])',
+        ) ?? [],
+      );
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleDialogKeydown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener('keydown', handleDialogKeydown);
+      if (shell) shell.inert = false;
+      trigger?.focus();
+    };
+  }, [confirmExport]);
+
   const totalPages = useMemo(
     () => (page ? Math.max(1, Math.ceil(page.total / page.pageSize)) : 1),
     [page],
@@ -485,6 +556,49 @@ export function ConversationBrowser({
       setConfirmDiscard(false);
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function preparePortableExport() {
+    if (!detail) return;
+    setExportBusy(true);
+    setExportError(null);
+    setExportStatus(null);
+    try {
+      const estimate = await api.portableExportEstimate(
+        detail.id,
+        detail.selectedLeaf ?? undefined,
+      );
+      setExportEstimate(estimate);
+      setConfirmExport(true);
+    } catch (error) {
+      setExportError(safeMessage(error));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  function cancelPortableExport() {
+    setConfirmExport(false);
+    setExportStatus('Export cancelled. No file was created.');
+  }
+
+  async function savePortableExport() {
+    if (!detail) return;
+    setExportBusy(true);
+    setExportError(null);
+    try {
+      const result = await api.savePortableExport(detail.id, detail.selectedLeaf ?? undefined);
+      setConfirmExport(false);
+      setExportStatus(
+        result.saved
+          ? 'Portable context package saved.'
+          : 'Export cancelled. No file was created.',
+      );
+    } catch (error) {
+      setExportError(safeMessage(error));
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -794,6 +908,28 @@ export function ConversationBrowser({
                     </span>
                   ) : null}
                 </div>
+                <div className="conversation-export-actions">
+                  <button
+                    ref={exportTriggerRef}
+                    type="button"
+                    className="button button-quiet button-small"
+                    onClick={() => void preparePortableExport()}
+                    disabled={exportBusy}
+                  >
+                    <Download size={15} aria-hidden="true" />
+                    {exportBusy && !confirmExport ? 'Preparing…' : 'Export active path'}
+                  </button>
+                  {exportStatus ? (
+                    <span className="export-status" role="status">
+                      {exportStatus}
+                    </span>
+                  ) : null}
+                  {exportError && !confirmExport ? (
+                    <span className="export-error" role="alert">
+                      {exportError}
+                    </span>
+                  ) : null}
+                </div>
                 {detail.diagnostics.length > 0 ? (
                   <p className="diagnostic-note">
                     This path has{' '}
@@ -862,6 +998,78 @@ export function ConversationBrowser({
                 disabled={actionBusy}
               >
                 {actionBusy ? 'Deleting…' : 'Delete local index'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {confirmExport && exportEstimate ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !exportBusyRef.current) {
+              cancelPortableExport();
+            }
+          }}
+        >
+          <section
+            ref={exportDialogRef}
+            className="confirm-dialog export-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-title"
+            aria-describedby="export-description"
+          >
+            <Download size={24} aria-hidden="true" />
+            <h2 id="export-title">Export this active path?</h2>
+            <p id="export-description">
+              This creates a plaintext, provider-neutral JSON package with readable Markdown.
+              Saving it does not upload anything, but sharing or importing it transfers the
+              selected private conversation under the destination provider&apos;s policies.
+            </p>
+            <dl className="export-estimate">
+              <div>
+                <dt>Conversations</dt>
+                <dd>{exportEstimate.conversationCount}</dd>
+              </div>
+              <div>
+                <dt>Messages</dt>
+                <dd>{exportEstimate.messageCount.toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>Estimated size</dt>
+                <dd>{formatBytes(exportEstimate.byteSize)}</dd>
+              </div>
+              <div>
+                <dt>Attachments</dt>
+                <dd>
+                  {exportEstimate.attachmentCount.toLocaleString()} detected, none included
+                </dd>
+              </div>
+            </dl>
+            {exportError ? (
+              <p className="export-dialog-error" role="alert">
+                {exportError}
+              </p>
+            ) : null}
+            <div className="dialog-actions">
+              <button
+                ref={cancelExportRef}
+                type="button"
+                className="button button-quiet"
+                onClick={cancelPortableExport}
+                disabled={exportBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => void savePortableExport()}
+                disabled={exportBusy}
+              >
+                {exportBusy ? 'Opening save dialog…' : 'Choose save location'}
               </button>
             </div>
           </section>

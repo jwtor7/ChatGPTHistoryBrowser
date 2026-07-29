@@ -23,7 +23,7 @@ targets.
 
 ## Data flow and trust boundaries
 
-The application has four sensitive boundaries:
+The application has five sensitive boundaries:
 
 1. **Export to backend.** JSON, metadata, filenames, and attachment bytes are
    attacker-controlled input even when they came from an official export.
@@ -33,6 +33,9 @@ The application has four sensitive boundaries:
    remain inert data and must not gain script or network capabilities.
 4. **Worktree to public Git.** Source control and CI are public disclosure
    boundaries. Ignore rules alone do not protect them.
+5. **Portable package to a destination chosen by the user.** An explicit local
+   export creates a new plaintext copy that is no longer protected by the
+   source archive's read-only boundary.
 
 Protected assets include the source export, its derived index, local filesystem
 contents outside the selected root, the local server session capability,
@@ -136,6 +139,29 @@ responses use a fixed type allowlist, `nosniff`, a sanitized
 slots, and a 64 MiB aggregate in-flight byte budget. Rust streams media from the
 already validated file handle instead of buffering the complete file. No
 response includes an absolute filesystem path.
+
+## Portable context export
+
+Portable context export is an explicit user-initiated disclosure boundary. The
+application serializes only the selected active conversation path into a
+versioned provider-neutral JSON package with an embedded Markdown rendering.
+It preserves message order, normalized roles, timestamps, the selected leaf,
+and opaque branch provenance. It does not include attachment bytes or names,
+filesystem paths, index metadata, diagnostics, session capabilities, logs, or
+provider credentials.
+
+Before opening the native save dialog, the UI shows the conversation, message,
+attachment, and exact serialized-byte counts. Cancelling either the in-app
+confirmation or native dialog is reported as cancelled and creates no file.
+The destination file is created with restrictive permissions on macOS and is
+never written beneath the source export by the application.
+
+Export works entirely through the authenticated loopback API and native save
+dialog. It makes no outbound request and performs no direct provider upload.
+The package contains a warning that it is plaintext private data and that
+sharing or importing it transfers the selected content under the destination
+provider's policies. Provider-specific compatibility must not be claimed
+without a current, fixture-backed contract test.
 
 ## Local server and network model
 

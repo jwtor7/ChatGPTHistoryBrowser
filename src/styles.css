@@ -1010,6 +1010,34 @@ select,
   gap: 0.35rem;
 }
 
+.conversation-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.conversation-export-actions .button {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.export-status,
+.export-error {
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.export-status {
+  color: var(--success);
+}
+
+.export-error {
+  color: var(--danger);
+}
+
 .diagnostic-note {
   max-width: 600px;
   margin: 1rem 0 0;
@@ -1451,6 +1479,10 @@ select,
   color: var(--danger);
 }
 
+.confirm-dialog.export-dialog > svg {
+  color: var(--accent);
+}
+
 .confirm-dialog h2 {
   margin: 1rem 0 0.5rem;
   font-family: Georgia, 'Times New Roman', serif;
@@ -1463,6 +1495,41 @@ select,
   margin: 0;
   color: var(--ink-soft);
   line-height: 1.55;
+}
+
+.export-estimate {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1.25rem 0 0;
+}
+
+.export-estimate > div {
+  padding: 0.75rem;
+  background: #f5f3ed;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.export-estimate dt {
+  color: var(--ink-faint);
+  font-size: 0.64rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.export-estimate dd {
+  margin: 0.3rem 0 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.confirm-dialog .export-dialog-error {
+  margin-top: 1rem;
+  color: var(--danger);
+  font-size: 0.78rem;
 }
 
 .dialog-actions {
