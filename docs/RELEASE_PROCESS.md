@@ -87,6 +87,8 @@ are configured:
 
 - `APPLE_CERTIFICATE`: base64-encoded Developer ID Application `.p12`;
 - `APPLE_CERTIFICATE_PASSWORD`: password used when exporting the `.p12`;
+- `APPLE_SIGNING_IDENTITY`: full `Developer ID Application: …` identity shown
+  by `security find-identity -v -p codesigning`;
 - `APPLE_API_ISSUER`: App Store Connect API issuer ID;
 - `APPLE_API_KEY`: App Store Connect API key ID; and
 - `APPLE_API_KEY_P8`: complete private key contents downloaded from App Store
