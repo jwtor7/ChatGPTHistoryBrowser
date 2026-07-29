@@ -1,0 +1,29 @@
+title = "ChatGPT History Browser secret-scanning policy"
+
+[extend]
+useDefault = true
+
+# Deliberately no repository-wide allowlist or baseline. A finding should be
+# removed or narrowly reviewed instead of being hidden by a broad exception.
+
+[[rules]]
+id = "assigned-long-lived-credential"
+description = "Credential-like value assigned directly in text"
+regex = '''(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*["'][^"'\r\n]{12,}["']'''
+keywords = [
+  "api_key",
+  "api-key",
+  "access_token",
+  "access-token",
+  "auth_token",
+  "auth-token",
+  "client_secret",
+  "client-secret",
+  "password",
+  "passwd",
+]
+
+[[rules]]
+id = "credential-bearing-url"
+description = "URL containing an embedded username and password"
+regex = '''(?i)\b[a-z][a-z0-9+.-]*://[^/\s:@]{1,128}:[^/\s@]{8,128}@'''

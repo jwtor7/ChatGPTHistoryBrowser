@@ -1,0 +1,61 @@
+[package]
+name = "chatgpt-history-browser"
+version = "0.1.1"
+description = "Privacy-first local browser for official ChatGPT data exports"
+edition = "2024"
+license = "MIT"
+rust-version = "1.97.1"
+
+[lib]
+name = "chatgpt_history_browser"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chatgpt-history-browser"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5.1", features = [] }
+
+[dependencies]
+axum = { version = "0.8.9", features = ["json", "macros"] }
+base64 = "0.22.1"
+blake3 = "1.8.2"
+cap-std = "4.0.2"
+directories = "6.0.0"
+fs2 = "0.4.3"
+http = "1.4.0"
+infer = "0.22.0"
+mime_guess = "2.0.5"
+rand = "0.9.2"
+rfd = "0.17.2"
+rusqlite = { version = "0.40.1", features = ["bundled", "modern_sqlite"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+subtle = "2.6.1"
+tauri = { version = "2.11.5", features = [] }
+thiserror = "2.0.17"
+tokio = { version = "1.49.0", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.0", features = ["fs", "limit", "set-header", "timeout"] }
+url = "2.5.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+http-body-util = "0.1.3"
+tempfile = "3.24.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

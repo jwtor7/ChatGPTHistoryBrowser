@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">ChatGPT History Browser</title>
+  <defs>
+    <linearGradient id="background" x1="72" y1="56" x2="448" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#203D36"/>
+      <stop offset="1" stop-color="#10201E"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M132 136h248a36 36 0 0 1 36 36v154a36 36 0 0 1-36 36H252l-74 58v-58h-46a36 36 0 0 1-36-36V172a36 36 0 0 1 36-36Z" fill="#F4EFE5"/>
+  <path d="M178 226h156M178 278h108" fill="none" stroke="#203D36" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="358" cy="302" r="68" fill="#D7A84B"/>
+  <path d="M332 292v-16a26 26 0 0 1 52 0v16m-61 0h70v54h-70Z" fill="none" stroke="#10201E" stroke-width="14" stroke-linejoin="round"/>
+</svg>

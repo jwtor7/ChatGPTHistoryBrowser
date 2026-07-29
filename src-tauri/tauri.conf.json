@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ChatGPT History Browser",
+  "version": "0.1.1",
+  "identifier": "app.chatgpt-history-browser.local",
+  "build": {
+    "beforeDevCommand": "npm run build:web",
+    "beforeBuildCommand": "npm run build:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": [],
+      "csp": null,
+      "dangerousDisableAssetCspModification": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "resources": {
+      "../dist/": "web/"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "category": "Utility",
+    "shortDescription": "Browse ChatGPT exports privately on your computer.",
+    "longDescription": "A local-only, read-only browser and search index for official ChatGPT data exports."
+  }
+}

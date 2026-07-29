@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.97.1
+
+jobs:
+  package-and-publish:
+    name: Verify, package, and publish
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out tagged source without stored credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan source before dependency installation
+        run: |
+          node scripts/privacy/audit-repo.mjs tracked
+          node scripts/privacy/audit-git-objects.mjs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Set up Rust
+        run: >-
+          rustup toolchain install 1.97.1
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Install locked dependencies
+        run: |
+          npm ci
+          cargo fetch --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify tag and source versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const expected = process.env.RELEASE_TAG.replace(/^v/, "");
+            const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const tauri = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8"));
+            const cargo = fs.readFileSync("src-tauri/Cargo.toml", "utf8")
+              .match(/^version = "([^"]+)"/m)?.[1];
+            const versions = [packageJson.version, tauri.version, cargo];
+            if (versions.some((version) => version !== expected)) {
+              throw new Error("Release tag does not match source versions");
+            }
+          '
+
+      - name: Run complete checks
+        run: npm run check
+
+      - name: Run security tests
+        run: npm run test:security
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run synthetic browser E2E
+        run: npm run test:e2e
+
+      - name: Run release-scale synthetic performance tests
+        run: npm run test:performance
+
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high
+
+      - name: Audit Rust dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --file src-tauri/Cargo.lock
+
+      - name: Build macOS package
+        run: npm run tauri:build
+
+      - name: Scan and verify packaged output
+        run: |
+          node scripts/privacy/audit-repo.mjs build
+          npm run privacy:package
+          codesign --verify --deep --strict --verbose=2 \
+            "src-tauri/target/release/bundle/macos/ChatGPT History Browser.app"
+          hdiutil verify \
+            "src-tauri/target/release/bundle/dmg/ChatGPT History Browser_${GITHUB_REF_NAME#v}_aarch64.dmg"
+
+      - name: Prepare release assets
+        run: |
+          cp \
+            "src-tauri/target/release/bundle/dmg/ChatGPT History Browser_${GITHUB_REF_NAME#v}_aarch64.dmg" \
+            "$RUNNER_TEMP/ChatGPT-History-Browser-macOS-arm64.dmg"
+          cd "$RUNNER_TEMP"
+          shasum -a 256 ChatGPT-History-Browser-macOS-arm64.dmg > SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          "$RUNNER_TEMP/ChatGPT-History-Browser-macOS-arm64.dmg#macOS Apple silicon DMG"
+          "$RUNNER_TEMP/SHA256SUMS.txt#SHA-256 checksums"
+          --verify-tag
+          --generate-notes
+          --latest
+          --title "ChatGPT History Browser $GITHUB_REF_NAME"
