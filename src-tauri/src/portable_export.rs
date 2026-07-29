@@ -5,10 +5,11 @@ use crate::{
     models::ConversationDetail,
 };
 
-const MAX_CONVERSATION_EXPORT_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_CONVERSATION_EXPORT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FILE_STEM_BYTES: usize = 96;
 const MAX_PDF_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PDF_PAGES: usize = 2_000;
+pub const MAX_CONVERSATION_SET_SIZE: usize = 100;
 
 const PRIVACY_NOTICE: &str = "This document contains private conversation data. \
 Uploading or sharing it transfers that data under the destination provider's policies.";
@@ -93,6 +94,56 @@ pub fn serialize_conversation_export(
     Ok((bytes, estimate))
 }
 
+pub fn serialize_conversation_set_export(
+    details: &[ConversationDetail],
+    format: ConversationExportFormat,
+) -> AppResult<(Vec<u8>, ConversationExportEstimate)> {
+    if details.is_empty() || details.len() > MAX_CONVERSATION_SET_SIZE {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+
+    let (message_count, attachment_count) =
+        details
+            .iter()
+            .try_fold((0_usize, 0_usize), |(messages, attachments), detail| {
+                let messages = messages
+                    .checked_add(detail.messages.len())
+                    .ok_or(ErrorCode::ResourceLimit)?;
+                let attachments =
+                    detail
+                        .messages
+                        .iter()
+                        .try_fold(attachments, |total, message| {
+                            total
+                                .checked_add(message.attachments.len())
+                                .ok_or(ErrorCode::ResourceLimit)
+                        })?;
+                Ok::<_, crate::error::AppError>((messages, attachments))
+            })?;
+
+    let bytes = match format {
+        ConversationExportFormat::Md => {
+            render_markdown_set(details, attachment_count)?.into_bytes()
+        }
+        ConversationExportFormat::Pdf => render_pdf_set(details, attachment_count)?,
+        ConversationExportFormat::Txt => {
+            render_plain_text_set(details, attachment_count)?.into_bytes()
+        }
+    };
+    if bytes.len() > MAX_CONVERSATION_EXPORT_BYTES {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+
+    let estimate = ConversationExportEstimate {
+        conversation_count: details.len(),
+        message_count,
+        attachment_count,
+        byte_size: bytes.len(),
+        file_name: conversation_set_export_file_name(details.len(), format),
+    };
+    Ok((bytes, estimate))
+}
+
 pub fn conversation_export_file_name(title: &str, format: ConversationExportFormat) -> String {
     let mut stem = String::new();
     let mut separator_pending = false;
@@ -131,6 +182,16 @@ pub fn conversation_export_file_name(title: &str, format: ConversationExportForm
     format!("{stem}.{}", format.extension())
 }
 
+pub fn conversation_set_export_file_name(
+    conversation_count: usize,
+    format: ConversationExportFormat,
+) -> String {
+    format!(
+        "Selected-conversations-{conversation_count}.{}",
+        format.extension()
+    )
+}
+
 fn render_markdown(detail: &ConversationDetail, attachment_count: usize) -> AppResult<String> {
     let mut output = String::new();
     let title = markdown_inline(&display_title(&detail.title));
@@ -162,6 +223,52 @@ fn render_markdown(detail: &ConversationDetail, attachment_count: usize) -> AppR
             append_bounded(&mut output, &safe_text)?;
             if !safe_text.ends_with('\n') {
                 append_bounded(&mut output, "\n")?;
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+fn render_markdown_set(
+    details: &[ConversationDetail],
+    attachment_count: usize,
+) -> AppResult<String> {
+    let mut output = String::new();
+    append_bounded(&mut output, "# Selected conversations\n\n> ")?;
+    append_bounded(&mut output, PRIVACY_NOTICE)?;
+    append_bounded(&mut output, "\n>\n> ")?;
+    append_bounded(&mut output, ATTACHMENT_NOTICE)?;
+    append_attachment_count_markdown(&mut output, attachment_count)?;
+    append_bounded(&mut output, "\n")?;
+
+    for (conversation_index, detail) in details.iter().enumerate() {
+        append_bounded(&mut output, "\n## ")?;
+        append_bounded(&mut output, &(conversation_index + 1).to_string())?;
+        append_bounded(&mut output, ". ")?;
+        append_bounded(&mut output, &markdown_inline(&display_title(&detail.title)))?;
+        append_bounded(&mut output, "\n")?;
+
+        for (message_index, message) in detail.messages.iter().enumerate() {
+            append_bounded(&mut output, "\n### ")?;
+            append_bounded(&mut output, &(message_index + 1).to_string())?;
+            append_bounded(&mut output, ". ")?;
+            append_bounded(&mut output, &markdown_inline(&display_role(&message.role)))?;
+            append_bounded(&mut output, "\n")?;
+            if let Some(created_at) = finite_timestamp(message.created_at) {
+                append_bounded(&mut output, "\nTimestamp (Unix seconds): `")?;
+                append_bounded(&mut output, &created_at.to_string())?;
+                append_bounded(&mut output, "`\n")?;
+            }
+            append_bounded(&mut output, "\n")?;
+            if message.text.trim().is_empty() {
+                append_bounded(&mut output, "_No text content._\n")?;
+            } else {
+                let safe_text = sanitize_markdown_export_text(&message.text)?;
+                append_bounded(&mut output, &safe_text)?;
+                if !safe_text.ends_with('\n') {
+                    append_bounded(&mut output, "\n")?;
+                }
             }
         }
     }
@@ -212,6 +319,54 @@ fn render_plain_text(
     Ok(output)
 }
 
+fn render_plain_text_set(
+    details: &[ConversationDetail],
+    attachment_count: usize,
+) -> AppResult<String> {
+    let mut output = String::new();
+    append_bounded(&mut output, "Selected conversations (")?;
+    append_bounded(&mut output, &details.len().to_string())?;
+    append_bounded(&mut output, ")\n========================\n\n")?;
+    append_bounded(&mut output, PRIVACY_NOTICE)?;
+    append_bounded(&mut output, "\n")?;
+    append_bounded(&mut output, ATTACHMENT_NOTICE)?;
+    append_attachment_count_plain(&mut output, attachment_count)?;
+    append_bounded(&mut output, "\n")?;
+
+    for (conversation_index, detail) in details.iter().enumerate() {
+        append_bounded(&mut output, "\nConversation ")?;
+        append_bounded(&mut output, &(conversation_index + 1).to_string())?;
+        append_bounded(&mut output, ": ")?;
+        append_bounded(&mut output, &display_title(&detail.title))?;
+        append_bounded(&mut output, "\n========================================\n")?;
+
+        for (message_index, message) in detail.messages.iter().enumerate() {
+            append_bounded(&mut output, "\n[")?;
+            append_bounded(&mut output, &(message_index + 1).to_string())?;
+            append_bounded(&mut output, "] ")?;
+            append_bounded(&mut output, &display_role(&message.role))?;
+            append_bounded(&mut output, "\n")?;
+            append_bounded(&mut output, "----------------------------------------\n")?;
+            if let Some(created_at) = finite_timestamp(message.created_at) {
+                append_bounded(&mut output, "Timestamp (Unix seconds): ")?;
+                append_bounded(&mut output, &created_at.to_string())?;
+                append_bounded(&mut output, "\n\n")?;
+            }
+            if message.text.trim().is_empty() {
+                append_bounded(&mut output, "(No text content.)\n")?;
+            } else {
+                let safe_text = sanitize_plain_export_text(&message.text)?;
+                append_bounded(&mut output, &safe_text)?;
+                if !safe_text.ends_with('\n') {
+                    append_bounded(&mut output, "\n")?;
+                }
+            }
+        }
+    }
+
+    Ok(output)
+}
+
 fn append_attachment_count_markdown(
     output: &mut String,
     attachment_count: usize,
@@ -253,6 +408,23 @@ fn append_attachment_count_plain(
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn render_pdf(detail: &ConversationDetail, attachment_count: usize) -> AppResult<Vec<u8>> {
+    let plain_text = render_plain_text(detail, attachment_count)?;
+    render_pdf_text(&plain_text)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn render_pdf_set(
+    details: &[ConversationDetail],
+    attachment_count: usize,
+) -> AppResult<Vec<u8>> {
+    let plain_text = render_plain_text_set(details, attachment_count)?;
+    render_pdf_text(&plain_text)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn render_pdf_text(plain_text: &str) -> AppResult<Vec<u8>> {
     use objc2_core_foundation::{
         CFAttributedString, CFDictionary, CFMutableData, CFRange, CFString, CGAffineTransform,
         CGPoint, CGRect, CGSize,
@@ -268,9 +440,8 @@ fn render_pdf(detail: &ConversationDetail, attachment_count: usize) -> AppResult
     const PAGE_MARGIN: f64 = 54.0;
     const FONT_SIZE: f64 = 10.0;
 
-    let plain_text = render_plain_text(detail, attachment_count)?;
     ensure_pdf_text_length(plain_text.len())?;
-    let string = CFString::from_str(&plain_text);
+    let string = CFString::from_str(plain_text);
     // SAFETY: These Core Text wrappers call Apple framework APIs with retained
     // Core Foundation values and documented nullable optional arguments.
     let font =
@@ -358,6 +529,14 @@ fn render_pdf(detail: &ConversationDetail, attachment_count: usize) -> AppResult
 
 #[cfg(not(target_os = "macos"))]
 fn render_pdf(_detail: &ConversationDetail, _attachment_count: usize) -> AppResult<Vec<u8>> {
+    Err(ErrorCode::UnsupportedRecord.into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_pdf_set(
+    _details: &[ConversationDetail],
+    _attachment_count: usize,
+) -> AppResult<Vec<u8>> {
     Err(ErrorCode::UnsupportedRecord.into())
 }
 
@@ -741,6 +920,73 @@ mod tests {
     }
 
     #[test]
+    fn selected_conversation_set_is_ordered_bounded_and_estimated_exactly() {
+        let first = synthetic_detail();
+        let mut second = synthetic_detail();
+        second.id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        second.title = "Fictional Harbor Follow-up".to_string();
+        second.messages[0].text = "Second synthetic conversation.".to_string();
+
+        let (bytes, estimate) = serialize_conversation_set_export(
+            &[first.clone(), second.clone()],
+            ConversationExportFormat::Md,
+        )
+        .expect("conversation set");
+        let document = String::from_utf8(bytes.clone()).expect("utf8");
+
+        assert!(document.starts_with("# Selected conversations\n"));
+        let first_position = document
+            .find("## 1. Fictional Lantern Notes")
+            .expect("first title");
+        let second_position = document
+            .find("## 2. Fictional Harbor Follow-up")
+            .expect("second title");
+        assert!(first_position < second_position);
+        assert!(document.contains("### 1. User"));
+        assert!(document.contains("Second synthetic conversation."));
+        assert_eq!(estimate.conversation_count, 2);
+        assert_eq!(
+            estimate.message_count,
+            first.messages.len() + second.messages.len()
+        );
+        assert_eq!(estimate.attachment_count, 2);
+        assert_eq!(estimate.byte_size, bytes.len());
+        assert_eq!(estimate.file_name, "Selected-conversations-2.md");
+        assert!(!document.contains(&first.id));
+        assert!(!document.contains(&second.id));
+        assert!(!document.contains("private-name-must-not-export"));
+
+        let empty = serialize_conversation_set_export(&[], ConversationExportFormat::Txt)
+            .expect_err("empty selection");
+        assert_eq!(empty.code(), ErrorCode::ResourceLimit);
+        let oversized = vec![synthetic_detail(); MAX_CONVERSATION_SET_SIZE + 1];
+        let oversized =
+            serialize_conversation_set_export(&oversized, ConversationExportFormat::Txt)
+                .expect_err("oversized selection");
+        assert_eq!(oversized.code(), ErrorCode::ResourceLimit);
+    }
+
+    #[test]
+    fn selected_conversation_set_plain_text_uses_readable_sections() {
+        let first = synthetic_detail();
+        let mut second = synthetic_detail();
+        second.id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        second.title = "Fictional Harbor Follow-up".to_string();
+
+        let (bytes, estimate) =
+            serialize_conversation_set_export(&[first, second], ConversationExportFormat::Txt)
+                .expect("plain set");
+        let document = String::from_utf8(bytes.clone()).expect("utf8");
+
+        assert!(document.starts_with("Selected conversations (2)\n"));
+        assert!(document.contains("Conversation 1: Fictional Lantern Notes"));
+        assert!(document.contains("Conversation 2: Fictional Harbor Follow-up"));
+        assert!(document.contains("2 attachments omitted"));
+        assert_eq!(estimate.byte_size, bytes.len());
+        assert_eq!(estimate.file_name, "Selected-conversations-2.txt");
+    }
+
+    #[test]
     fn exports_neutralize_active_markdown_and_terminal_controls() {
         let mut detail = synthetic_detail();
         detail.messages[0].text = concat!(
@@ -880,6 +1126,38 @@ mod tests {
     }
 
     #[test]
+    fn selected_set_formats_exclude_attachments_branches_and_opaque_metadata() {
+        let first = synthetic_detail();
+        let mut second = synthetic_detail();
+        second.id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        second.title = "Fictional Harbor Follow-up".to_string();
+        let details = [first, second];
+        let mut formats = vec![ConversationExportFormat::Md, ConversationExportFormat::Txt];
+        #[cfg(target_os = "macos")]
+        formats.push(ConversationExportFormat::Pdf);
+
+        for format in formats {
+            let (bytes, _) =
+                serialize_conversation_set_export(&details, format).expect("set export");
+            let visible = String::from_utf8_lossy(&bytes);
+            for detail in &details {
+                assert!(!visible.contains(&detail.id));
+                assert!(
+                    !visible.contains(
+                        detail
+                            .selected_leaf
+                            .as_deref()
+                            .expect("synthetic selected leaf")
+                    )
+                );
+            }
+            assert!(!visible.contains("private-name-must-not-export"));
+            assert!(!visible.contains("private branch preview must not export"));
+            assert!(!visible.contains("fedcba9876543210fedcba9876543210"));
+        }
+    }
+
+    #[test]
     fn estimate_serializes_camel_case_fields_including_file_name() {
         let detail = synthetic_detail();
         let (_, estimate) =
@@ -926,6 +1204,27 @@ mod tests {
 
         assert!(page_count >= 3, "expected multiple pages, got {page_count}");
         assert!(text.contains("Synthetic page line 179"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn selected_conversation_set_pdf_round_trips_both_titles() {
+        let first = synthetic_detail();
+        let mut second = synthetic_detail();
+        second.id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        second.title = "Fictional Harbor Follow-up".to_string();
+
+        let (bytes, estimate) =
+            serialize_conversation_set_export(&[first, second], ConversationExportFormat::Pdf)
+                .expect("set pdf");
+        let (text, page_count) = extracted_pdf_text_and_page_count(&bytes);
+
+        assert!(page_count >= 1);
+        assert!(text.contains("Fictional Lantern Notes"));
+        assert!(text.contains("Fictional Harbor Follow-up"));
+        assert_eq!(estimate.conversation_count, 2);
+        assert_eq!(estimate.byte_size, bytes.len());
+        assert_eq!(estimate.file_name, "Selected-conversations-2.pdf");
     }
 
     #[test]

@@ -5,7 +5,9 @@ import type {
   ConversationExportEstimate,
   ConversationExportFormat,
   ConversationFilters,
+  ConversationMatchQuery,
   ConversationPage,
+  ConversationSetSelection,
   ExportValidation,
   IndexProgress,
 } from './types';
@@ -63,6 +65,27 @@ function dateBoundarySeconds(value: string, endOfDay: boolean): string | null {
   const suffix = endOfDay ? 'T23:59:59.999' : 'T00:00:00.000';
   const milliseconds = new Date(`${value}${suffix}`).getTime();
   return Number.isFinite(milliseconds) ? String(milliseconds / 1_000) : null;
+}
+
+export function matchingConversationQuery(
+  filters: ConversationFilters,
+): ConversationMatchQuery {
+  const query: ConversationMatchQuery = {};
+  if (filters.search) query.search = filters.search;
+  const from = dateBoundarySeconds(filters.dateFrom, false);
+  const to = dateBoundarySeconds(filters.dateTo, true);
+  if (from) query.dateFrom = Number(from);
+  if (to) query.dateTo = Number(to);
+  if (filters.role) query.role = filters.role;
+  if (filters.archived) query.archived = filters.archived === 'true';
+  if (filters.starred) query.starred = filters.starred === 'true';
+  if (filters.hasAttachments) {
+    query.hasAttachments = filters.hasAttachments === 'true';
+  }
+  if (filters.attachmentKind) {
+    query.attachmentKind = filters.attachmentKind;
+  }
+  return query;
 }
 
 export class LocalApi {
@@ -199,6 +222,29 @@ export class LocalApi {
     return this.request(`/api/conversations/${encodeURIComponent(id)}/export?${query}`, {
       method: 'POST',
       body: JSON.stringify({}),
+    });
+  }
+
+  conversationSetExportEstimate(
+    selection: ConversationSetSelection,
+    format: ConversationExportFormat,
+    signal?: AbortSignal,
+  ): Promise<ConversationExportEstimate> {
+    return this.request('/api/conversation-set/export/estimate', {
+      method: 'POST',
+      body: JSON.stringify({ selection, format }),
+      signal,
+    });
+  }
+
+  saveConversationSetExport(
+    selection: ConversationSetSelection,
+    format: ConversationExportFormat,
+    selectionSnapshot?: string,
+  ): Promise<{ saved: boolean; fileName?: string }> {
+    return this.request('/api/conversation-set/export', {
+      method: 'POST',
+      body: JSON.stringify({ selection, format, selectionSnapshot }),
     });
   }
 

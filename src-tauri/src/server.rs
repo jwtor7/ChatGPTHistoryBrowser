@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     future::Future,
     io::Write,
     net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener},
@@ -45,9 +46,14 @@ use crate::{
     },
     error::{AppError, AppResult, ErrorCode},
     indexer::{ArchiveSession, IndexCoordinator},
-    models::{AppStatus, ConversationQuery, ExportValidation, IndexProgress, PreviewKind},
+    models::{
+        AppStatus, AttachmentKindFilter, ConversationQuery, ExportValidation, IndexProgress,
+        PreviewKind,
+    },
     portable_export::{
-        ConversationExportEstimate, ConversationExportFormat, serialize_conversation_export,
+        ConversationExportEstimate, ConversationExportFormat, MAX_CONVERSATION_EXPORT_BYTES,
+        MAX_CONVERSATION_SET_SIZE, serialize_conversation_export,
+        serialize_conversation_set_export,
     },
     safe_root::SafeExportRoot,
 };
@@ -55,6 +61,8 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_CONCURRENT_PREVIEWS: usize = 4;
 const MAX_CONCURRENT_PDF_EXPORTS: usize = 1;
+const MAX_CONVERSATION_SET_MESSAGES: usize = 100_000;
+const MAX_CONVERSATION_SET_ATTACHMENTS: usize = 100_000;
 const PREVIEW_BUDGET_UNIT: u64 = 1024 * 1024;
 const PREVIEW_BUDGET_UNITS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -219,6 +227,10 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
             "/api/conversations/{id}/export",
             get(conversation_export_estimate),
         )
+        .route(
+            "/api/conversation-set/export/estimate",
+            post(conversation_set_export_estimate),
+        )
         .route("/api/attachments/{id}/content", get(attachment_content))
         .route("/api/attachments/{id}/text", get(attachment_text))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api))
@@ -231,6 +243,10 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
         .route(
             "/api/conversations/{id}/export",
             post(save_conversation_export),
+        )
+        .route(
+            "/api/conversation-set/export",
+            post(save_conversation_set_export),
         )
         .route("/api/attachments/{id}/save", post(save_attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api));
@@ -442,6 +458,72 @@ struct ConversationExportQuery {
     format: ConversationExportFormat,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConversationSetMatchQuery {
+    search: Option<String>,
+    date_from: Option<f64>,
+    date_to: Option<f64>,
+    role: Option<String>,
+    archived: Option<bool>,
+    starred: Option<bool>,
+    has_attachments: Option<bool>,
+    attachment_kind: Option<AttachmentKindFilter>,
+}
+
+impl ConversationSetMatchQuery {
+    fn as_conversation_query(&self) -> AppResult<ConversationQuery> {
+        if self.role.as_deref().is_some_and(|role| {
+            !matches!(role, "user" | "assistant" | "system" | "tool" | "other")
+        }) {
+            return Err(ErrorCode::InvalidRequest.into());
+        }
+        Ok(ConversationQuery {
+            page: Some(0),
+            page_size: Some(MAX_CONVERSATION_SET_SIZE as u32),
+            search: self.search.clone(),
+            date_from: self.date_from,
+            date_to: self.date_to,
+            role: self.role.clone(),
+            archived: self.archived,
+            starred: self.starred,
+            has_attachments: self.has_attachments,
+            attachment_kind: self.attachment_kind,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum ConversationSetSelection {
+    Manual { ids: Vec<String> },
+    Matching { query: ConversationSetMatchQuery },
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConversationSetExportRequest {
+    selection: ConversationSetSelection,
+    format: ConversationExportFormat,
+    selection_snapshot: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationSetExportEstimateResponse {
+    #[serde(flatten)]
+    estimate: ConversationExportEstimate,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_snapshot: Option<String>,
+}
+
+struct PreparedConversationSetExport {
+    bytes: Vec<u8>,
+    estimate: ConversationExportEstimate,
+    selection_snapshot: Option<String>,
+    matching: bool,
+}
+
 async fn get_conversation(
     State(state): State<ServerState>,
     AxumPath(id): AxumPath<String>,
@@ -463,6 +545,17 @@ async fn conversation_export_estimate(
 ) -> AppResult<Json<ConversationExportEstimate>> {
     let (_, estimate) = build_conversation_export(&state, id, query.leaf, query.format).await?;
     Ok(Json(estimate))
+}
+
+async fn conversation_set_export_estimate(
+    State(state): State<ServerState>,
+    Json(request): Json<ConversationSetExportRequest>,
+) -> AppResult<Json<ConversationSetExportEstimateResponse>> {
+    let prepared = prepare_conversation_set_export(&state, request, false).await?;
+    Ok(Json(ConversationSetExportEstimateResponse {
+        estimate: prepared.estimate,
+        selection_snapshot: prepared.selection_snapshot,
+    }))
 }
 
 async fn save_conversation_export(
@@ -524,6 +617,168 @@ async fn save_conversation_export(
     }))
 }
 
+async fn save_conversation_set_export(
+    State(state): State<ServerState>,
+    Json(request): Json<ConversationSetExportRequest>,
+) -> AppResult<Json<SaveResult>> {
+    let root = state.session()?.root.clone();
+    let format = request.format;
+    let prepared = prepare_conversation_set_export(&state, request, true).await?;
+    let file_name = prepared.estimate.file_name;
+    let bytes = prepared.bytes;
+    let required_extension = format.extension().to_string();
+    let dispatcher = state
+        .main_thread_dispatcher
+        .as_ref()
+        .ok_or(AppError::Internal)?;
+    let dialog_name = file_name.clone();
+    let dialog_extension = required_extension.clone();
+    let format_label = format.human_label();
+    let dialog_title = if prepared.matching {
+        format!("Save matching conversations as {format_label}")
+    } else {
+        format!("Save selected conversations as {format_label}")
+    };
+    let selected = build_future_on_main_thread(dispatcher, move || {
+        let selection = rfd::AsyncFileDialog::new()
+            .set_title(dialog_title)
+            .set_file_name(dialog_name)
+            .add_filter(format_label, &[dialog_extension])
+            .save_file();
+        async move {
+            selection
+                .await
+                .map(|selected| selected.path().to_path_buf())
+        }
+    })
+    .await?;
+    let Some(destination) = selected else {
+        return Ok(Json(SaveResult {
+            saved: false,
+            file_name: None,
+        }));
+    };
+    let destination = with_required_extension(destination, &required_extension);
+    let saved_file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or(file_name);
+    tokio::task::spawn_blocking(move || -> AppResult<()> {
+        if !root.write_destination_is_outside_root(&destination) {
+            return Err(ErrorCode::PathRejected.into());
+        }
+        write_private_destination(&destination, |target| {
+            target.write_all(&bytes).map_err(|_| ErrorCode::Internal)?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|_| AppError::Internal)??;
+    Ok(Json(SaveResult {
+        saved: true,
+        file_name: Some(saved_file_name),
+    }))
+}
+
+async fn prepare_conversation_set_export(
+    state: &ServerState,
+    request: ConversationSetExportRequest,
+    require_snapshot: bool,
+) -> AppResult<PreparedConversationSetExport> {
+    let format = request.format;
+    match request.selection {
+        ConversationSetSelection::Manual { ids } => {
+            if request.selection_snapshot.is_some() {
+                return Err(ErrorCode::InvalidRequest.into());
+            }
+            let (bytes, estimate) = build_conversation_set_export(state, ids, format).await?;
+            Ok(PreparedConversationSetExport {
+                bytes,
+                estimate,
+                selection_snapshot: None,
+                matching: false,
+            })
+        }
+        ConversationSetSelection::Matching { query } => {
+            let expected_snapshot = match (require_snapshot, request.selection_snapshot) {
+                (true, Some(snapshot)) => Some(validate_selection_snapshot(snapshot)?),
+                (true, None) | (false, Some(_)) => {
+                    return Err(ErrorCode::InvalidRequest.into());
+                }
+                (false, None) => None,
+            };
+            let ids = resolve_matching_conversation_ids(state, &query).await?;
+            let (bytes, estimate) =
+                build_conversation_set_export(state, ids.clone(), format).await?;
+            let selection_snapshot =
+                conversation_set_selection_snapshot(&query, &ids, format, &bytes)?;
+            if expected_snapshot.as_deref().is_some_and(|expected| {
+                !bool::from(expected.as_bytes().ct_eq(selection_snapshot.as_bytes()))
+            }) {
+                return Err(ErrorCode::ResultSetChanged.into());
+            }
+            Ok(PreparedConversationSetExport {
+                bytes,
+                estimate,
+                selection_snapshot: Some(selection_snapshot),
+                matching: true,
+            })
+        }
+    }
+}
+
+async fn resolve_matching_conversation_ids(
+    state: &ServerState,
+    match_query: &ConversationSetMatchQuery,
+) -> AppResult<Vec<String>> {
+    let query = match_query.as_conversation_query()?;
+    let store = state.session()?.store.clone();
+    tokio::task::spawn_blocking(move || {
+        let page = store.query_conversations(&query)?;
+        matching_conversation_ids(page)
+    })
+    .await
+    .map_err(|_| AppError::Internal)?
+}
+
+fn matching_conversation_ids(page: crate::models::ConversationPage) -> AppResult<Vec<String>> {
+    if page.total == 0 || page.total > MAX_CONVERSATION_SET_SIZE as u64 {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+    if page.items.len() as u64 != page.total || page.has_more {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+    validate_conversation_set_ids(page.items.into_iter().map(|item| item.id).collect())
+}
+
+fn conversation_set_selection_snapshot(
+    query: &ConversationSetMatchQuery,
+    ids: &[String],
+    format: ConversationExportFormat,
+    bytes: &[u8],
+) -> AppResult<String> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"chatgpt-history-browser/conversation-set-selection/v1\0");
+    hasher.update(&serde_json::to_vec(query).map_err(|_| AppError::Internal)?);
+    hasher.update(&[0]);
+    hasher.update(format.extension().as_bytes());
+    hasher.update(&[0]);
+    for id in ids {
+        hasher.update(id.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(bytes);
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn validate_selection_snapshot(snapshot: String) -> AppResult<String> {
+    if snapshot.len() != 64 || !snapshot.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ErrorCode::InvalidRequest.into());
+    }
+    Ok(snapshot)
+}
+
 async fn build_conversation_export(
     state: &ServerState,
     id: String,
@@ -550,6 +805,78 @@ async fn build_conversation_export(
     })
     .await
     .map_err(|_| AppError::Internal)?
+}
+
+async fn build_conversation_set_export(
+    state: &ServerState,
+    ids: Vec<String>,
+    format: ConversationExportFormat,
+) -> AppResult<(Vec<u8>, ConversationExportEstimate)> {
+    let ids = validate_conversation_set_ids(ids)?;
+    let store = state.session()?.store.clone();
+    let pdf_permit = if format == ConversationExportFormat::Pdf {
+        Some(
+            state
+                .pdf_export_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal)?,
+        )
+    } else {
+        None
+    };
+    tokio::task::spawn_blocking(move || {
+        let _pdf_permit = pdf_permit;
+        let mut details = Vec::with_capacity(ids.len());
+        let mut message_count = 0_usize;
+        let mut attachment_count = 0_usize;
+        let mut projected_text_bytes = 0_usize;
+        for id in &ids {
+            let detail = store.conversation_detail(id, None)?;
+            message_count = message_count
+                .checked_add(detail.messages.len())
+                .ok_or(ErrorCode::ResourceLimit)?;
+            projected_text_bytes = projected_text_bytes
+                .checked_add(detail.title.len())
+                .ok_or(ErrorCode::ResourceLimit)?;
+            for message in &detail.messages {
+                attachment_count = attachment_count
+                    .checked_add(message.attachments.len())
+                    .ok_or(ErrorCode::ResourceLimit)?;
+                projected_text_bytes = projected_text_bytes
+                    .checked_add(message.role.len())
+                    .and_then(|total| total.checked_add(message.text.len()))
+                    .ok_or(ErrorCode::ResourceLimit)?;
+            }
+            if message_count > MAX_CONVERSATION_SET_MESSAGES
+                || attachment_count > MAX_CONVERSATION_SET_ATTACHMENTS
+                || projected_text_bytes > MAX_CONVERSATION_EXPORT_BYTES
+            {
+                return Err(ErrorCode::ResourceLimit.into());
+            }
+            details.push(detail);
+        }
+        serialize_conversation_set_export(&details, format)
+    })
+    .await
+    .map_err(|_| AppError::Internal)?
+}
+
+fn validate_conversation_set_ids(ids: Vec<String>) -> AppResult<Vec<String>> {
+    if ids.is_empty() || ids.len() > MAX_CONVERSATION_SET_SIZE {
+        return Err(ErrorCode::ResourceLimit.into());
+    }
+    let mut seen = HashSet::with_capacity(ids.len());
+    for id in &ids {
+        if id.len() != 32
+            || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !seen.insert(id.clone())
+        {
+            return Err(ErrorCode::InvalidRequest.into());
+        }
+    }
+    Ok(ids)
 }
 
 fn create_private_file(path: &Path) -> AppResult<std::fs::File> {
@@ -1109,6 +1436,220 @@ mod tests {
             acquire_preview_budget(&state, MAX_INLINE_MEDIA_BYTES).expect("full byte budget");
         assert!(acquire_preview_budget(&state, 1).is_err());
         drop(full_budget);
+    }
+
+    #[test]
+    fn selected_conversation_ids_are_opaque_unique_and_bounded() {
+        let first = "0123456789abcdef0123456789abcdef".to_string();
+        let second = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        assert_eq!(
+            validate_conversation_set_ids(vec![first.clone(), second.clone()])
+                .expect("valid selection"),
+            vec![first.clone(), second]
+        );
+
+        assert_eq!(
+            validate_conversation_set_ids(Vec::new())
+                .expect_err("empty selection")
+                .code(),
+            ErrorCode::ResourceLimit
+        );
+        assert_eq!(
+            validate_conversation_set_ids(vec![first.clone(), first])
+                .expect_err("duplicate selection")
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            validate_conversation_set_ids(vec!["../synthetic".to_string()])
+                .expect_err("invalid identifier")
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            validate_conversation_set_ids(vec![
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+                MAX_CONVERSATION_SET_SIZE + 1
+            ])
+            .expect_err("oversized selection")
+            .code(),
+            ErrorCode::ResourceLimit
+        );
+    }
+
+    #[test]
+    fn matching_selection_query_is_bounded_and_rejects_unknown_roles() {
+        let query = ConversationSetMatchQuery {
+            search: Some("synthetic atlas".to_string()),
+            date_from: Some(1_700_000_000.0),
+            date_to: None,
+            role: Some("assistant".to_string()),
+            archived: Some(false),
+            starred: None,
+            has_attachments: Some(true),
+            attachment_kind: Some(AttachmentKindFilter::Pdf),
+        };
+        let converted = query.as_conversation_query().expect("valid matching query");
+        assert_eq!(converted.page, Some(0));
+        assert_eq!(converted.page_size, Some(MAX_CONVERSATION_SET_SIZE as u32));
+        assert_eq!(converted.search.as_deref(), Some("synthetic atlas"));
+        assert_eq!(converted.role.as_deref(), Some("assistant"));
+        assert_eq!(converted.has_attachments, Some(true));
+        assert_eq!(converted.attachment_kind, Some(AttachmentKindFilter::Pdf));
+
+        let invalid = ConversationSetMatchQuery {
+            role: Some("administrator".to_string()),
+            ..query
+        };
+        assert_eq!(
+            invalid
+                .as_conversation_query()
+                .expect_err("unknown role")
+                .code(),
+            ErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn complete_matching_page_is_required_and_preserves_backend_order() {
+        let item = |id: &str| crate::models::ConversationListItem {
+            id: id.to_string(),
+            title: "Synthetic conversation".to_string(),
+            created_at: Some(1_700_000_000.0),
+            updated_at: Some(1_700_000_001.0),
+            archived: Some(false),
+            starred: Some(false),
+            has_attachments: false,
+            message_count: 1,
+            match_preview: None,
+        };
+        let first = "0123456789abcdef0123456789abcdef";
+        let second = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let page = crate::models::ConversationPage {
+            items: vec![item(first), item(second)],
+            page: 0,
+            page_size: MAX_CONVERSATION_SET_SIZE as u32,
+            total: 2,
+            has_more: false,
+        };
+        assert_eq!(
+            matching_conversation_ids(page).expect("complete result"),
+            vec![first.to_string(), second.to_string()]
+        );
+
+        for page in [
+            crate::models::ConversationPage {
+                items: Vec::new(),
+                page: 0,
+                page_size: MAX_CONVERSATION_SET_SIZE as u32,
+                total: 0,
+                has_more: false,
+            },
+            crate::models::ConversationPage {
+                items: vec![item(first)],
+                page: 0,
+                page_size: MAX_CONVERSATION_SET_SIZE as u32,
+                total: MAX_CONVERSATION_SET_SIZE as u64 + 1,
+                has_more: true,
+            },
+            crate::models::ConversationPage {
+                items: vec![item(first)],
+                page: 0,
+                page_size: MAX_CONVERSATION_SET_SIZE as u32,
+                total: 2,
+                has_more: true,
+            },
+        ] {
+            assert_eq!(
+                matching_conversation_ids(page)
+                    .expect_err("incomplete or unsafe result")
+                    .code(),
+                ErrorCode::ResourceLimit
+            );
+        }
+    }
+
+    #[test]
+    fn matching_selection_snapshot_binds_query_order_format_and_content() {
+        let query = ConversationSetMatchQuery {
+            search: Some("synthetic".to_string()),
+            date_from: None,
+            date_to: None,
+            role: None,
+            archived: None,
+            starred: None,
+            has_attachments: None,
+            attachment_kind: None,
+        };
+        let ids = vec![
+            "0123456789abcdef0123456789abcdef".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        ];
+        let first = conversation_set_selection_snapshot(
+            &query,
+            &ids,
+            ConversationExportFormat::Md,
+            b"a",
+        )
+        .expect("snapshot");
+        let repeated = conversation_set_selection_snapshot(
+            &query,
+            &ids,
+            ConversationExportFormat::Md,
+            b"a",
+        )
+        .expect("repeat");
+        assert_eq!(first, repeated);
+        assert_eq!(first.len(), 64);
+        assert_ne!(
+            first,
+            conversation_set_selection_snapshot(
+                &query,
+                &ids,
+                ConversationExportFormat::Txt,
+                b"a"
+            )
+            .expect("format snapshot")
+        );
+        assert_ne!(
+            first,
+            conversation_set_selection_snapshot(
+                &query,
+                &ids.iter().cloned().rev().collect::<Vec<_>>(),
+                ConversationExportFormat::Md,
+                b"a"
+            )
+            .expect("order snapshot")
+        );
+        assert_ne!(
+            first,
+            conversation_set_selection_snapshot(
+                &ConversationSetMatchQuery {
+                    search: Some("different".to_string()),
+                    ..query.clone()
+                },
+                &ids,
+                ConversationExportFormat::Md,
+                b"a"
+            )
+            .expect("query snapshot")
+        );
+        assert_ne!(
+            first,
+            conversation_set_selection_snapshot(
+                &query,
+                &ids,
+                ConversationExportFormat::Md,
+                b"changed"
+            )
+            .expect("content snapshot")
+        );
+        assert_eq!(
+            validate_selection_snapshot("not-a-snapshot".to_string())
+                .expect_err("invalid snapshot")
+                .code(),
+            ErrorCode::InvalidRequest
+        );
     }
 
     #[test]

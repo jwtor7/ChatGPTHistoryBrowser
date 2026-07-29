@@ -103,6 +103,7 @@ export interface ConversationExportEstimate {
   attachmentCount: number;
   byteSize: number;
   fileName: string;
+  selectionSnapshot?: string;
 }
 
 export type AttachmentKindFilter =
@@ -120,6 +121,27 @@ export interface ConversationFilters {
   hasAttachments: '' | 'true' | 'false';
   attachmentKind: AttachmentKindFilter;
 }
+
+export interface ConversationMatchQuery {
+  search?: string;
+  dateFrom?: number;
+  dateTo?: number;
+  role?: string;
+  archived?: boolean;
+  starred?: boolean;
+  hasAttachments?: boolean;
+  attachmentKind?: Exclude<AttachmentKindFilter, ''>;
+}
+
+export type ConversationSetSelection =
+  | {
+      kind: 'manual';
+      ids: string[];
+    }
+  | {
+      kind: 'matching';
+      query: ConversationMatchQuery;
+    };
 
 export interface ApiErrorBody {
   error?: {

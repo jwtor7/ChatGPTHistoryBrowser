@@ -115,6 +115,7 @@ function conversationDetail(branch: boolean) {
 async function installSameOriginApi(page: Page, exportSelected = true) {
   const offOriginRequests: string[] = [];
   const apiRequests: URL[] = [];
+  const conversationSetRequests: Array<Record<string, unknown>> = [];
 
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -222,6 +223,49 @@ async function installSameOriginApi(page: Page, exportSelected = true) {
       return;
     }
 
+    if (url.pathname === '/api/conversation-set/export/estimate') {
+      const body = request.postDataJSON() as {
+        selection:
+          | { kind: 'manual'; ids: string[] }
+          | { kind: 'matching'; query: Record<string, unknown> };
+        format: string;
+      };
+      conversationSetRequests.push(body);
+      const count = body.selection.kind === 'manual' ? body.selection.ids.length : 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversationCount: count,
+          messageCount: count * 3,
+          attachmentCount: 2,
+          byteSize: 8_192,
+          fileName: `Selected-conversations-${count}.${body.format}`,
+          ...(body.selection.kind === 'matching' ? { selectionSnapshot: 'b'.repeat(64) } : {}),
+        }),
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/conversation-set/export') {
+      const body = request.postDataJSON() as {
+        selection:
+          | { kind: 'manual'; ids: string[] }
+          | { kind: 'matching'; query: Record<string, unknown> };
+        format: string;
+        selectionSnapshot?: string;
+      };
+      conversationSetRequests.push(body);
+      const count = body.selection.kind === 'manual' ? body.selection.ids.length : 1;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          saved: true,
+          fileName: `Selected-conversations-${count}.${body.format}`,
+        }),
+      });
+      return;
+    }
+
     if (url.pathname.startsWith('/api/conversations/')) {
       await route.fulfill({
         contentType: 'application/json',
@@ -257,7 +301,7 @@ async function installSameOriginApi(page: Page, exportSelected = true) {
     });
   });
 
-  return { apiRequests, offOriginRequests };
+  return { apiRequests, conversationSetRequests, offOriginRequests };
 }
 
 test('production onboarding presents the branded local-only entry point', async ({ page }) => {
@@ -318,6 +362,22 @@ test('production build browses safely with same-origin mocked APIs only', async 
   await expect(page.getByText(/1 active.*audio/i)).toBeVisible();
   await page.getByRole('button', { name: /clear search and filters/i }).click();
 
+  await page.getByRole('checkbox', { name: /select this page/i }).check();
+  await expect(page.getByText('50 manually selected')).toBeVisible();
+  await page.getByRole('button', { name: /export selected/i }).click();
+  const selectedExportDialog = page.getByRole('dialog', {
+    name: /export 50 selected conversations/i,
+  });
+  await expect(selectedExportDialog).toBeVisible();
+  await expect(selectedExportDialog.getByText(/default active paths/i)).toBeVisible();
+  await expect(selectedExportDialog.getByText('Selected-conversations-50.md')).toBeVisible();
+  await expect(selectedExportDialog.getByText('150', { exact: true })).toBeVisible();
+  await selectedExportDialog.getByRole('button', { name: /cancel/i }).click();
+  await expect(page.getByRole('status')).toContainText(/export cancelled/i);
+  await page.getByRole('button', { name: /^clear$/i }).click();
+  await page.getByRole('button', { name: /select all 50 matching/i }).click();
+  await expect(page.getByText('All 50 matching selected')).toBeVisible();
+
   if (process.env.GENERATE_SYNTHETIC_SCREENSHOT === '1') {
     await page.waitForTimeout(800);
     await page.screenshot({
@@ -368,6 +428,27 @@ test('production build browses safely with same-origin mocked APIs only', async 
       observed.apiRequests.some((url) => url.searchParams.get('search') === 'fictional atlas'),
     )
     .toBe(true);
+
+  await page.getByRole('button', { name: /select all 1 matching/i }).click();
+  await expect(page.getByText('All 1 matching selected')).toBeVisible();
+  await page.getByRole('button', { name: /export all matching/i }).click();
+  const matchingExportDialog = page.getByRole('dialog', {
+    name: /export all 1 matching conversation/i,
+  });
+  await expect(matchingExportDialog).toContainText(
+    /matching the submitted search and filters/i,
+  );
+  await expect(matchingExportDialog).toContainText(/rechecked before the save dialog/i);
+  await matchingExportDialog.getByRole('button', { name: /save markdown/i }).click();
+  await expect(page.getByRole('status')).toContainText('Saved as Selected-conversations-1.md');
+  expect(observed.conversationSetRequests.at(-1)).toEqual({
+    selection: {
+      kind: 'matching',
+      query: { search: 'fictional atlas' },
+    },
+    format: 'md',
+    selectionSnapshot: 'b'.repeat(64),
+  });
 
   expect(observed.offOriginRequests).toEqual([]);
   expect(observed.apiRequests.every((url) => url.origin === ORIGIN)).toBe(true);
