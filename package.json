@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-history-browser",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "A privacy-first local browser for official ChatGPT data exports.",
   "type": "module",
@@ -9,7 +9,8 @@
     "web:dev": "vite --host 127.0.0.1",
     "build:web": "vite build",
     "build": "npm run build:web && RUSTFLAGS=\"--remap-path-prefix=${HOME}=/_local_build\" cargo build --manifest-path src-tauri/Cargo.toml --release",
-    "tauri:build": "RUSTFLAGS=\"--remap-path-prefix=${HOME}=/_local_build\" tauri build",
+    "tauri:build": "APPLE_SIGNING_IDENTITY=- RUSTFLAGS=\"--remap-path-prefix=${HOME}=/_local_build\" tauri build",
+    "tauri:build:release": "RUSTFLAGS=\"--remap-path-prefix=${HOME}=/_local_build\" tauri build",
     "format": "prettier --write . && cargo fmt --manifest-path src-tauri/Cargo.toml",
     "format:check": "prettier --check . && cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "lint": "eslint . --max-warnings 0 && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",

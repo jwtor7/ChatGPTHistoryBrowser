@@ -5,6 +5,19 @@ All notable user-facing changes are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-29
+
+### Fixed
+
+- Public macOS releases now fail closed unless they are Developer ID signed,
+  Apple-notarized, stapled, and accepted by Gatekeeper, preventing the
+  “Apple could not verify” warning caused by ad-hoc release builds.
+
+### Security
+
+- Release signing and App Store Connect credentials are supplied only through
+  GitHub Actions secrets; local builds retain an explicit ad-hoc signing path.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added
@@ -103,6 +116,7 @@ All notable user-facing changes are documented here. This project follows
   and loopback-only, and packaged artifacts are scanned for prohibited private
   data before release.
 
-[Unreleased]: https://github.com/jwtor7/ChatGPTHistoryBrowser/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jwtor7/ChatGPTHistoryBrowser/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jwtor7/ChatGPTHistoryBrowser/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jwtor7/ChatGPTHistoryBrowser/releases/tag/v0.2.0
 [0.1.1]: https://github.com/jwtor7/ChatGPTHistoryBrowser/releases/tag/v0.1.1

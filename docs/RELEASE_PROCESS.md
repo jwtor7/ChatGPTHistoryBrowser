@@ -67,18 +67,33 @@ From a clean checkout of `main`:
    `cargo audit --file src-tauri/Cargo.lock`.
 7. Run `node scripts/privacy/audit-repo.mjs all` and
    `node scripts/privacy/audit-git-objects.mjs`.
-8. Run `npm run tauri:build` and `npm run privacy:package`.
-9. Verify the app with `codesign --verify --deep --strict`.
-10. Verify the DMG with `hdiutil verify`.
-11. Merge the release preparation through the normal pull-request path.
-12. Create and push an annotated `vX.Y.Z` tag on the verified `main` commit.
+8. Run `npm run tauri:build:release` with the Apple signing and notarization
+   environment configured, then run `npm run privacy:package`.
+9. Verify the app and DMG signatures with `codesign --verify`.
+10. Validate the stapled notarization tickets with `xcrun stapler validate`.
+11. Assess the app and DMG with `spctl --assess`.
+12. Verify the DMG filesystem with `hdiutil verify`.
+13. Merge the release preparation through the normal pull-request path.
+14. Create and push an annotated `vX.Y.Z` tag on the verified `main` commit.
 
 The tag-triggered release workflow repeats the release gates, creates
 `ChatGPT-History-Browser-macOS-arm64.dmg`, generates `SHA256SUMS.txt`, and
 publishes both to GitHub Releases.
 
-## Signing status
+## Apple release credentials
 
-Current public builds are ad-hoc signed for internal bundle integrity. They are
-not Developer ID signed or Apple-notarized. Release notes and installation
-instructions must state this plainly until notarization is implemented.
+The tag workflow fails closed unless these GitHub Actions repository secrets
+are configured:
+
+- `APPLE_CERTIFICATE`: base64-encoded Developer ID Application `.p12`;
+- `APPLE_CERTIFICATE_PASSWORD`: password used when exporting the `.p12`;
+- `APPLE_API_ISSUER`: App Store Connect API issuer ID;
+- `APPLE_API_KEY`: App Store Connect API key ID; and
+- `APPLE_API_KEY_P8`: complete private key contents downloaded from App Store
+  Connect.
+
+`npm run tauri:build` remains ad-hoc signed for local development.
+`npm run tauri:build:release` deliberately has no ad-hoc fallback. Tauri imports
+the certificate, enables hardened runtime, submits the package to Apple, and
+staples the accepted ticket. The workflow publishes nothing unless signature,
+ticket, Gatekeeper, privacy, and DMG-integrity checks all pass.
