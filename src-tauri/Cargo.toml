@@ -19,7 +19,7 @@ tauri-build = { version = "2.5.1", features = [] }
 
 [dependencies]
 axum = { version = "0.8.9", features = ["json", "macros"] }
-base64 = "0.22.1"
+base64 = "0.23.0"
 blake3 = "1.8.2"
 cap-std = "4.0.2"
 directories = "6.0.0"
