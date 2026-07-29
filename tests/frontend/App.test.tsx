@@ -204,7 +204,15 @@ describe('History Browser frontend', () => {
     const requestedUrls: string[] = [];
     let exportSaveCalls = 0;
     let conversationSetSaveCalls = 0;
-    const conversationSetRequests: Array<{ ids: string[]; format: string }> = [];
+    const matchingSnapshot = 'a'.repeat(64);
+    type ConversationSetRequest = {
+      selection:
+        | { kind: 'manual'; ids: string[] }
+        | { kind: 'matching'; query: Record<string, unknown> };
+      format: string;
+      selectionSnapshot?: string;
+    };
+    const conversationSetRequests: ConversationSetRequest[] = [];
     let holdFirstPdfEstimate = true;
     let initialExportEstimateReady = false;
     let resolveInitialExportEstimate: ((response: Response) => void) | undefined;
@@ -305,26 +313,40 @@ describe('History Browser frontend', () => {
           );
         }
         if (url === '/api/conversation-set/export/estimate') {
-          const request = jsonRequestBody(init) as {
-            ids: string[];
-            format: string;
-          };
+          const request = jsonRequestBody(init) as ConversationSetRequest;
           conversationSetRequests.push(request);
+          const count = request.selection.kind === 'manual' ? request.selection.ids.length : 2;
           return Promise.resolve(
             json({
-              conversationCount: request.ids.length,
-              messageCount: request.ids.length,
+              conversationCount: count,
+              messageCount: count,
               attachmentCount: 0,
               byteSize: request.format === 'pdf' ? 6_144 : 3_072,
-              fileName: `Selected-conversations-${request.ids.length}.${request.format}`,
+              fileName: `Selected-conversations-${count}.${request.format}`,
+              ...(request.selection.kind === 'matching'
+                ? { selectionSnapshot: matchingSnapshot }
+                : {}),
             }),
           );
         }
         if (url === '/api/conversation-set/export') {
           conversationSetSaveCalls += 1;
-          conversationSetRequests.push(
-            jsonRequestBody(init) as { ids: string[]; format: string },
-          );
+          const request = jsonRequestBody(init) as ConversationSetRequest;
+          conversationSetRequests.push(request);
+          if (request.selection.kind === 'matching') {
+            return Promise.resolve(
+              json(
+                {
+                  error: {
+                    code: 'RESULT_SET_CHANGED',
+                    message:
+                      'The matching conversations changed. Review the current results and try again.',
+                  },
+                },
+                { status: 409 },
+              ),
+            );
+          }
           return Promise.resolve(json({ saved: false }));
         }
         if (url.includes('?leaf=synthetic-branch-leaf')) {
@@ -382,16 +404,16 @@ describe('History Browser frontend', () => {
     });
 
     await user.click(screen.getByRole('checkbox', { name: /select this page/i }));
-    expect(screen.getByText('50 selected')).toBeVisible();
+    expect(screen.getByText('50 manually selected')).toBeVisible();
     await user.click(screen.getByRole('button', { name: /next page/i }));
     await waitFor(() => {
       expect(requestedUrls.some((url) => url.includes('page=1'))).toBe(true);
     });
     expect(screen.getByText('Page 2 of 3')).toBeVisible();
-    expect(screen.getByText('50 selected')).toBeVisible();
+    expect(screen.getByText('50 manually selected')).toBeVisible();
     expect(screen.getByRole('checkbox', { name: /select this page/i })).toBeChecked();
     await user.click(screen.getByRole('button', { name: /^clear$/i }));
-    expect(screen.getByText('0 selected')).toBeVisible();
+    expect(screen.getByText('0 manually selected')).toBeVisible();
 
     const search = screen.getByRole('searchbox', {
       name: /search conversations/i,
@@ -403,22 +425,69 @@ describe('History Browser frontend', () => {
       expect(requestedUrls.some((url) => url.includes('search=fictional+atlas'))).toBe(true);
     });
 
+    await user.click(screen.getByRole('button', { name: /select all 2 matching/i }));
+    expect(screen.getByText('All 2 matching selected')).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /select this page/i })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: /export all matching/i }));
+    const matchingExportDialog = await screen.findByRole('dialog', {
+      name: /export all 2 matching conversations/i,
+    });
+    expect(matchingExportDialog).toHaveTextContent(
+      /all 2 conversations matching the submitted search and filters/i,
+    );
+    expect(matchingExportDialog).toHaveTextContent(/rechecked before the save dialog/i);
+    expect(
+      await within(matchingExportDialog).findByText('Selected-conversations-2.md'),
+    ).toBeVisible();
+    expect(conversationSetRequests[0]).toEqual({
+      selection: {
+        kind: 'matching',
+        query: { search: 'fictional atlas' },
+      },
+      format: 'md',
+    });
+    await user.click(
+      within(matchingExportDialog).getByRole('button', { name: /save markdown/i }),
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      /matching result set changed.*select all matching again/i,
+    );
+    expect(conversationSetRequests[1]).toEqual({
+      selection: {
+        kind: 'matching',
+        query: { search: 'fictional atlas' },
+      },
+      format: 'md',
+      selectionSnapshot: matchingSnapshot,
+    });
+    expect(screen.getByText('0 manually selected')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /select all 2 matching/i }));
+    await user.selectOptions(screen.getByRole('combobox', { name: /role/i }), 'user');
+    expect(
+      await screen.findByText(/all-matching selection cleared because.*filters changed/i),
+    ).toBeVisible();
+    expect(screen.getByText('0 manually selected')).toBeVisible();
+    await user.selectOptions(screen.getByRole('combobox', { name: /role/i }), '');
+
     await user.click(screen.getByRole('checkbox', { name: /select this page/i }));
-    expect(screen.getByText('2 selected')).toBeVisible();
+    expect(screen.getByText('2 manually selected')).toBeVisible();
     await user.click(screen.getByRole('button', { name: /export selected/i }));
     const selectedExportDialog = await screen.findByRole('dialog', {
       name: /export 2 selected conversations/i,
     });
     expect(selectedExportDialog).toHaveTextContent(/default active paths/i);
-    expect(selectedExportDialog).toHaveTextContent(/2 selected conversations/i);
+    expect(selectedExportDialog).toHaveTextContent(/2 manually selected conversations/i);
     expect(selectedExportDialog).toHaveTextContent(
       /alternate branches and attachments aren.t/i,
     );
     expect(
       await within(selectedExportDialog).findByText('Selected-conversations-2.md'),
     ).toBeVisible();
-    expect(conversationSetRequests[0]).toEqual({
-      ids: [items[0].id, items[1].id],
+    expect(conversationSetRequests[2]).toEqual({
+      selection: {
+        kind: 'manual',
+        ids: [items[0].id, items[1].id],
+      },
       format: 'md',
     });
     await user.click(within(selectedExportDialog).getByRole('radio', { name: /plain text/i }));
@@ -431,9 +500,12 @@ describe('History Browser frontend', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       /export cancelled.*no file was created/i,
     );
-    expect(conversationSetSaveCalls).toBe(1);
+    expect(conversationSetSaveCalls).toBe(2);
     expect(conversationSetRequests.at(-1)).toEqual({
-      ids: [items[0].id, items[1].id],
+      selection: {
+        kind: 'manual',
+        ids: [items[0].id, items[1].id],
+      },
       format: 'txt',
     });
 

@@ -8,9 +8,9 @@ plain-text document. The feature extends the existing single-conversation
 export boundary without adding uploads, provider credentials, attachment
 copies, or writes to the selected source export.
 
-The first implementation slice supports an explicit selection of at most 100
-conversations across pages. Exporting the complete current filtered result set
-remains a follow-up in issue #2.
+Users can choose an explicit selection of at most 100 conversations across
+pages or the complete submitted search and filter result when it contains at
+most 100 conversations.
 
 ## Functional requirements
 
@@ -69,16 +69,24 @@ shall create no file and report the operation as cancelled.
 
 ### FR-010: Filtered result set
 
-Where **Select all matching** is implemented, when the user chooses it, the
-system shall select the complete submitted search and filter result independent
-of pagination and shall explicitly invalidate that selection when its query
-changes.
+When the user chooses **Select all matching**, the system shall select the
+complete submitted search and filter result independent of pagination and
+shall explicitly invalidate that selection when its query changes.
+
+### FR-011: Result snapshot
+
+While an all-matching estimate is visible, when the user confirms save, the
+system shall re-evaluate the query and serialized document and shall stop
+before the native save dialog if the canonical query, ordered result IDs,
+format, or serialized bytes differ from the estimate snapshot.
 
 ## Non-functional requirements
 
 ### Performance and bounds
 
 - A manual selected set shall contain 1 to 100 unique opaque conversation IDs.
+- An all-matching set shall contain 1 to 100 conversations after the backend
+  resolves the submitted query independently of pagination.
 - A selected set shall contain at most 100,000 projected messages and 100,000
   omitted attachment records.
 - A generated document shall not exceed 128 MiB.
@@ -93,6 +101,8 @@ changes.
   mutation protection.
 - The backend shall validate every identifier, reject duplicates, and enforce
   bounds independently of the renderer.
+- A result snapshot shall be an opaque digest and shall not contain query text,
+  conversation IDs, document content, or filesystem metadata.
 - Markdown shall neutralize active HTML and remote Markdown resources outside
   literal code.
 - All formats shall visibly encode terminal control characters.
@@ -163,6 +173,24 @@ when a selected-set export is estimated,
 then every application request remains same-origin,
 and no off-origin request is attempted.
 
+### AC-008: Select all matching
+
+Given a synthetic filtered result that spans multiple pages and contains no
+more than 100 conversations,
+when the user chooses **Select all matching**,
+then the backend resolves every matching conversation independent of
+pagination,
+and the UI identifies the mode as all matching rather than manual selection,
+and the estimate contains the complete result count.
+
+### AC-009: Query or result invalidation
+
+Given an active all-matching selection,
+when the submitted search or filters change,
+then the UI clears that selection and explains why,
+and when the backend result or serialized document changes after estimate,
+then save returns `RESULT_SET_CHANGED` before opening the native save dialog.
+
 ## Error handling
 
 | Error condition                              | HTTP status | Public behavior                                      |
@@ -172,6 +200,7 @@ and no off-origin request is attempted.
 | Missing selected conversation                |         404 | `CONVERSATION_NOT_FOUND`: create no estimate or file |
 | Destination inside the source export         |         400 | `PATH_REJECTED`: create no file                      |
 | Generated output exceeds a byte or PDF bound |         400 | `RESOURCE_LIMIT`: fail before the save dialog        |
+| Matching query, result, or document changed  |         409 | `RESULT_SET_CHANGED`: clear and require review       |
 | Expired loopback capability                  |         401 | `UNAUTHORIZED`: request application restart          |
 | Native dialog cancellation                   |         200 | Return `saved: false` without a completion claim     |
 
@@ -183,7 +212,7 @@ and no off-origin request is attempted.
 - [x] Validate 1 to 100 unique opaque conversation IDs.
 - [x] Add authenticated estimate and save endpoints.
 - [x] Reuse restrictive destination, extension, containment, and PDF controls.
-- [ ] Add query-snapshot support for **Select all matching**.
+- [x] Add query-snapshot support for **Select all matching**.
 
 ### Frontend
 
@@ -191,7 +220,7 @@ and no off-origin request is attempted.
 - [x] Preserve manual selections across pages and filters.
 - [x] Reuse the exact-estimate export dialog for selected sets.
 - [x] Add clear-selection and safe-limit feedback.
-- [ ] Add **Select all matching** with explicit query invalidation.
+- [x] Add **Select all matching** with explicit query invalidation.
 
 ### Testing
 
@@ -199,7 +228,7 @@ and no off-origin request is attempted.
 - [x] Add frontend request, format-change, save-cancellation, and accessibility
       coverage.
 - [x] Add production browser coverage with same-origin-only mocked APIs.
-- [ ] Add filtered-result query snapshot and invalidation coverage.
+- [x] Add filtered-result query snapshot and invalidation coverage.
 
 ## Out of scope
 

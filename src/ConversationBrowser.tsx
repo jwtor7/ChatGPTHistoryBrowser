@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ApiError, type LocalApi } from './api';
+import { ApiError, type LocalApi, matchingConversationQuery } from './api';
 import { AttachmentCard } from './AttachmentCard';
 import { BrandMark } from './BrandMark';
 import { SafeMarkdown } from './SafeMarkdown';
@@ -32,7 +32,9 @@ import type {
   ConversationExportFormat,
   ConversationFilters,
   ConversationListItem,
+  ConversationMatchQuery,
   ConversationPage,
+  ConversationSetSelection,
   MessageView,
 } from './types';
 
@@ -48,10 +50,21 @@ type ConversationExportTarget =
       title: string;
     }
   | {
-      kind: 'selection';
+      kind: 'manual';
       ids: string[];
       title: string;
+    }
+  | {
+      kind: 'matching';
+      query: ConversationMatchQuery;
+      count: number;
+      title: string;
     };
+
+interface MatchingSelection {
+  query: ConversationMatchQuery;
+  count: number;
+}
 
 const INITIAL_FILTERS: ConversationFilters = {
   page: 0,
@@ -137,21 +150,28 @@ function ConversationRow({
   item,
   selected,
   selectedForExport,
+  allMatchingSelected,
   onSelect,
   onToggleExportSelection,
 }: {
   item: ConversationListItem;
   selected: boolean;
   selectedForExport: boolean;
+  allMatchingSelected: boolean;
   onSelect: () => void;
   onToggleExportSelection: () => void;
 }) {
   return (
-    <div className={`conversation-row-shell${selectedForExport ? ' is-export-selected' : ''}`}>
+    <div
+      className={`conversation-row-shell${
+        selectedForExport || allMatchingSelected ? ' is-export-selected' : ''
+      }`}
+    >
       <label className="conversation-export-selector">
         <input
           type="checkbox"
-          checked={selectedForExport}
+          checked={selectedForExport || allMatchingSelected}
+          disabled={allMatchingSelected}
           onChange={onToggleExportSelection}
           aria-label={`Select ${item.title || 'Untitled conversation'} for export`}
         />
@@ -185,12 +205,14 @@ function ConversationList({
   page,
   selectedId,
   selectedForExport,
+  allMatchingSelected,
   onSelect,
   onToggleExportSelection,
 }: {
   page: ConversationPage;
   selectedId: string | null;
   selectedForExport: ReadonlySet<string>;
+  allMatchingSelected: boolean;
   onSelect: (id: string) => void;
   onToggleExportSelection: (id: string) => void;
 }) {
@@ -225,6 +247,7 @@ function ConversationList({
                 item={item}
                 selected={selectedId === item.id}
                 selectedForExport={selectedForExport.has(item.id)}
+                allMatchingSelected={allMatchingSelected}
                 onSelect={() => onSelect(item.id)}
                 onToggleExportSelection={() => onToggleExportSelection(item.id)}
               />
@@ -372,6 +395,7 @@ export function ConversationBrowser({
   const [detailError, setDetailError] = useState<string | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [selectedForExport, setSelectedForExport] = useState<string[]>([]);
+  const [matchingSelection, setMatchingSelection] = useState<MatchingSelection | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmExport, setConfirmExport] = useState(false);
@@ -563,9 +587,12 @@ export function ConversationBrowser({
     [page],
   );
   const selectedForExportSet = useMemo(() => new Set(selectedForExport), [selectedForExport]);
+  const allMatchingSelected = matchingSelection !== null;
+  const exportSelectionCount = matchingSelection?.count ?? selectedForExport.length;
   const visiblePageFullySelected =
     Boolean(page?.items.length) &&
-    page?.items.every((item) => selectedForExportSet.has(item.id)) === true;
+    (allMatchingSelected ||
+      page?.items.every((item) => selectedForExportSet.has(item.id)) === true);
   const activeFilterCount = [
     filters.dateFrom,
     filters.dateTo,
@@ -580,6 +607,12 @@ export function ConversationBrowser({
     key: Key,
     value: ConversationFilters[Key],
   ) {
+    if (matchingSelection) {
+      setMatchingSelection(null);
+      setSelectionError(
+        'All-matching selection cleared because the search or filters changed.',
+      );
+    }
     setListLoading(true);
     setListError(null);
     setPage(null);
@@ -661,6 +694,7 @@ export function ConversationBrowser({
   }
 
   function toggleExportSelection(id: string) {
+    setMatchingSelection(null);
     setSelectedForExport((current) => {
       if (current.includes(id)) {
         setSelectionError(null);
@@ -679,6 +713,7 @@ export function ConversationBrowser({
 
   function toggleVisiblePageSelection() {
     if (!page) return;
+    setMatchingSelection(null);
     const visibleIds = page.items.map((item) => item.id);
     if (visiblePageFullySelected) {
       const visible = new Set(visibleIds);
@@ -700,6 +735,36 @@ export function ConversationBrowser({
     });
   }
 
+  function selectAllMatchingConversations() {
+    if (!page || page.total === 0) return;
+    if (page.total > MAX_SELECTED_CONVERSATIONS) {
+      setSelectionError(
+        `This result has ${page.total.toLocaleString()} conversations. Narrow the search or filters to ${MAX_SELECTED_CONVERSATIONS} or fewer before exporting all matching.`,
+      );
+      return;
+    }
+    setSelectedForExport([]);
+    setMatchingSelection({
+      query: matchingConversationQuery(filters),
+      count: page.total,
+    });
+    setSelectionError(null);
+  }
+
+  function clearExportSelection() {
+    setSelectedForExport([]);
+    setMatchingSelection(null);
+    setSelectionError(null);
+  }
+
+  function conversationSetSelection(
+    target: Exclude<ConversationExportTarget, { kind: 'single' }>,
+  ): ConversationSetSelection {
+    return target.kind === 'manual'
+      ? { kind: 'manual', ids: target.ids }
+      : { kind: 'matching', query: target.query };
+  }
+
   function estimateConversationExport(
     target: ConversationExportTarget,
     format: ConversationExportFormat,
@@ -707,7 +772,7 @@ export function ConversationBrowser({
   ): Promise<ConversationExportEstimate> {
     return target.kind === 'single'
       ? api.conversationExportEstimate(target.id, format, target.leaf, signal)
-      : api.conversationSetExportEstimate(target.ids, format, signal);
+      : api.conversationSetExportEstimate(conversationSetSelection(target), format, signal);
   }
 
   async function prepareExport(target: ConversationExportTarget, trigger: HTMLButtonElement) {
@@ -749,11 +814,23 @@ export function ConversationBrowser({
   }
 
   async function prepareSelectedConversationExport(trigger: HTMLButtonElement) {
+    if (matchingSelection) {
+      await prepareExport(
+        {
+          kind: 'matching',
+          query: matchingSelection.query,
+          count: matchingSelection.count,
+          title: `all ${matchingSelection.count.toLocaleString()} matching conversations`,
+        },
+        trigger,
+      );
+      return;
+    }
     if (selectedForExport.length === 0) return;
     const ids = [...selectedForExport];
     await prepareExport(
       {
-        kind: 'selection',
+        kind: 'manual',
         ids,
         title: `${ids.length.toLocaleString()} selected conversations`,
       },
@@ -798,13 +875,23 @@ export function ConversationBrowser({
 
   async function saveConversationExport() {
     if (!exportTarget || !exportEstimate) return;
+    if (exportTarget.kind === 'matching' && !exportEstimate.selectionSnapshot) {
+      setExportError(
+        'The matching result snapshot is unavailable. Recalculate the export before saving.',
+      );
+      return;
+    }
     setExportSaving(true);
     setExportError(null);
     try {
       const result =
         exportTarget.kind === 'single'
           ? await api.saveConversationExport(exportTarget.id, exportFormat, exportTarget.leaf)
-          : await api.saveConversationSetExport(exportTarget.ids, exportFormat);
+          : await api.saveConversationSetExport(
+              conversationSetSelection(exportTarget),
+              exportFormat,
+              exportEstimate.selectionSnapshot,
+            );
       setConfirmExport(false);
       setExportStatus(
         result.saved
@@ -812,6 +899,19 @@ export function ConversationBrowser({
           : 'Export cancelled. No file was created.',
       );
     } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.code === 'RESULT_SET_CHANGED' &&
+        exportTarget.kind === 'matching'
+      ) {
+        const message =
+          'The matching result set changed. Review the current results and select all matching again.';
+        setConfirmExport(false);
+        setMatchingSelection(null);
+        setSelectionError(message);
+        setExportStatus(message);
+        return;
+      }
       setExportError(safeMessage(error));
     } finally {
       setExportSaving(false);
@@ -988,6 +1088,12 @@ export function ConversationBrowser({
                 type="button"
                 className="button button-quiet button-small"
                 onClick={() => {
+                  if (matchingSelection) {
+                    setMatchingSelection(null);
+                    setSelectionError(
+                      'All-matching selection cleared because the search or filters changed.',
+                    );
+                  }
                   setListLoading(true);
                   setListError(null);
                   setPage(null);
@@ -1017,12 +1123,23 @@ export function ConversationBrowser({
                   <input
                     type="checkbox"
                     checked={visiblePageFullySelected}
+                    disabled={allMatchingSelected || exportBusy}
                     onChange={toggleVisiblePageSelection}
                   />
                   <span>Select this page</span>
                 </label>
+                <button
+                  type="button"
+                  className="button button-quiet button-small"
+                  onClick={selectAllMatchingConversations}
+                  disabled={allMatchingSelected || exportBusy}
+                >
+                  Select all {page.total.toLocaleString()} matching
+                </button>
                 <span className="selection-count" aria-live="polite">
-                  {selectedForExport.length.toLocaleString()} selected
+                  {allMatchingSelected
+                    ? `All ${exportSelectionCount.toLocaleString()} matching selected`
+                    : `${exportSelectionCount.toLocaleString()} manually selected`}
                 </span>
                 <button
                   type="button"
@@ -1030,19 +1147,16 @@ export function ConversationBrowser({
                   onClick={(event) =>
                     void prepareSelectedConversationExport(event.currentTarget)
                   }
-                  disabled={selectedForExport.length === 0 || exportBusy}
+                  disabled={exportSelectionCount === 0 || exportBusy}
                 >
                   <Download size={14} aria-hidden="true" />
-                  Export selected…
+                  {allMatchingSelected ? 'Export all matching…' : 'Export selected…'}
                 </button>
-                {selectedForExport.length > 0 ? (
+                {exportSelectionCount > 0 ? (
                   <button
                     type="button"
                     className="button button-quiet button-small"
-                    onClick={() => {
-                      setSelectedForExport([]);
-                      setSelectionError(null);
-                    }}
+                    onClick={clearExportSelection}
                     disabled={exportBusy}
                   >
                     Clear
@@ -1056,7 +1170,9 @@ export function ConversationBrowser({
               </>
             ) : (
               <span className="selection-count">
-                {selectedForExport.length.toLocaleString()} selected
+                {allMatchingSelected
+                  ? `All ${exportSelectionCount.toLocaleString()} matching selected`
+                  : `${exportSelectionCount.toLocaleString()} manually selected`}
               </span>
             )}
           </div>
@@ -1098,6 +1214,7 @@ export function ConversationBrowser({
               page={page}
               selectedId={selectedId}
               selectedForExport={selectedForExportSet}
+              allMatchingSelected={allMatchingSelected}
               onSelect={chooseConversation}
               onToggleExportSelection={toggleExportSelection}
             />
@@ -1336,13 +1453,22 @@ export function ConversationBrowser({
                 branches and attachments aren&apos;t. Sharing or importing the saved file
                 transfers its conversation data to the destination.
               </p>
+            ) : exportTarget.kind === 'matching' ? (
+              <p id="export-description">
+                This document contains the default active paths for all{' '}
+                {exportTarget.count.toLocaleString()} conversations matching the submitted
+                search and filters. Nothing is uploaded. Alternate branches and attachments
+                aren&apos;t included. Matching results are rechecked before the save dialog
+                opens; if they changed, saving stops for review. Sharing or importing the saved
+                file transfers all included conversation data to the destination.
+              </p>
             ) : (
               <p id="export-description">
                 This document contains the default active paths for{' '}
-                {exportTarget.ids.length.toLocaleString()} selected conversations. Nothing is
-                uploaded. Alternate branches and attachments aren&apos;t included. Sharing or
-                importing the saved file transfers all included conversation data to the
-                destination.
+                {exportTarget.ids.length.toLocaleString()} manually selected conversations.
+                Nothing is uploaded. Alternate branches and attachments aren&apos;t included.
+                Sharing or importing the saved file transfers all included conversation data to
+                the destination.
               </p>
             )}
             <fieldset className="export-format">

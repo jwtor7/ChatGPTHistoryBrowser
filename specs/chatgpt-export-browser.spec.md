@@ -189,6 +189,7 @@ The SQLite database, FTS indexes, WAL files, staging generations, thumbnails, an
 | CONV-012 | Ubiquitous        | The system SHALL render message content as text and structured safe components, never by executing export-provided HTML, JavaScript, CSS, or embedded objects.                                                    |
 | CONV-013 | Event-driven      | When the user exports a conversation, the system SHALL offer Markdown, PDF, and plain text; show the exact proposed title-based filename and size; and serialize only the selected active path.                   |
 | CONV-014 | Event-driven      | When the user exports an explicit set of up to 100 unique conversations, the system SHALL offer Markdown, PDF, and plain text; show exact counts and size; and serialize default active paths in selection order. |
+| CONV-015 | Event-driven      | When the user selects all matching, the system SHALL resolve the complete submitted search and filters independent of pagination and SHALL reject save if the query, result order, format, or document changed.   |
 
 ### 7.6 Attachments
 
@@ -361,8 +362,8 @@ The wire schema is generated from shared Rust and TypeScript types. These resour
 | `GET /api/conversations/{conversation_id}`               | Bearer                    | Bounded active-path and branch data                                        |
 | `GET /api/conversations/{conversation_id}/export`        | Bearer                    | Estimate a Markdown, PDF, or text conversation document                    |
 | `POST /api/conversations/{conversation_id}/export`       | Bearer + native user UI   | Save a Markdown, PDF, or text conversation document                        |
-| `POST /api/conversation-set/export/estimate`             | Bearer + same origin      | Estimate a bounded selected-conversation document                          |
-| `POST /api/conversation-set/export`                      | Bearer + native user UI   | Save a bounded selected-conversation document                              |
+| `POST /api/conversation-set/export/estimate`             | Bearer + same origin      | Estimate a bounded manual or all-matching conversation document            |
+| `POST /api/conversation-set/export`                      | Bearer + native user UI   | Revalidate and save a bounded conversation-set document                    |
 | `POST /api/attachments/{attachment_id}/media-capability` | Bearer                    | Mint session-bound media URL                                               |
 | `GET /api/attachments/{attachment_id}/text`              | Bearer                    | Read a bounded escaped-text preview                                        |
 | `GET /media/{capability}`                                | Signed capability         | Bounded full or single-range attachment response                           |
@@ -581,6 +582,14 @@ Unknown internal errors map to `INTERNAL_ERROR` with no raw exception text in th
 **Then** the exact conversation, message, omitted-attachment, and byte counts are shown before saving<br>
 **And** the document preserves selection and message order without internal identifiers, attachment names, branches, paths, capabilities, logs, or diagnostics<br>
 **And** cancelling confirmation or the native dialog creates no file.
+
+### AC-022: Complete filtered conversation document
+
+**Given** a generated filtered result of no more than 100 conversations across multiple pages<br>
+**When** the user selects all matching and confirms a document export<br>
+**Then** the backend resolves the complete submitted query independent of pagination<br>
+**And** changing the query clears the selection visibly<br>
+**And** any query, result-order, format, or serialized-document change after estimate returns a conflict before the native save dialog opens.
 
 ## 13. Test matrix
 

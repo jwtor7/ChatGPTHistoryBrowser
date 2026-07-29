@@ -21,6 +21,7 @@ pub enum ErrorCode {
     IndexBusy,
     IndexCancelled,
     IndexUnavailable,
+    ResultSetChanged,
     ConversationNotFound,
     AttachmentNotFound,
     AttachmentUnavailable,
@@ -43,6 +44,9 @@ impl ErrorCode {
             Self::IndexBusy => "An indexing job is already running.",
             Self::IndexCancelled => "Indexing was cancelled safely.",
             Self::IndexUnavailable => "The local index is unavailable.",
+            Self::ResultSetChanged => {
+                "The matching conversations changed. Review the current results and try again."
+            }
             Self::ConversationNotFound => "The conversation was not found.",
             Self::AttachmentNotFound => "The attachment was not found.",
             Self::AttachmentUnavailable => "The attachment file is unavailable.",
@@ -82,7 +86,7 @@ impl AppError {
             ErrorCode::ConversationNotFound | ErrorCode::AttachmentNotFound => {
                 StatusCode::NOT_FOUND
             }
-            ErrorCode::IndexBusy => StatusCode::CONFLICT,
+            ErrorCode::IndexBusy | ErrorCode::ResultSetChanged => StatusCode::CONFLICT,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorCode::AttachmentUnavailable => StatusCode::GONE,
             _ => StatusCode::BAD_REQUEST,

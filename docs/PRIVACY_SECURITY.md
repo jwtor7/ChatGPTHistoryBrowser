@@ -144,13 +144,23 @@ response includes an absolute filesystem path.
 
 Conversation export is an explicit user-initiated disclosure boundary. The
 application serializes the chosen active path for one conversation, or the
-default active paths for an explicit selection of up to 100 conversations, as
-Markdown, PDF, or plain text. A manual selection persists across pages and
-filters but is sent to the backend as a bounded list of unique opaque IDs. The
-backend validates that list independently. Export preserves selection order,
-message order, normalized roles, and timestamps. It does not include attachment
-bytes or names, filesystem paths, source or branch identifiers, index metadata,
-diagnostics, session capabilities, logs, or provider credentials.
+default active paths for up to 100 manually selected or filter-matched
+conversations, as Markdown, PDF, or plain text. A manual selection persists
+across pages and filters but is sent to the backend as a bounded list of unique
+opaque IDs. An all-matching selection sends the submitted search and filters,
+never a renderer-supplied page of IDs. The backend independently resolves the
+complete ordered result with pagination disabled and enforces the same
+100-conversation limit.
+
+For an all-matching estimate, the backend hashes the canonical query, ordered
+opaque IDs, format, and serialized bytes. Saving must supply that opaque
+snapshot. The backend re-runs the query and serialization and returns a
+conflict before opening the native dialog when the snapshot differs. The UI
+also clears all-matching mode visibly when a search or filter changes. Export
+preserves selection order, message order, normalized roles, and timestamps. It
+does not include attachment bytes or names, filesystem paths, source or branch
+identifiers, index metadata, diagnostics, session capabilities, logs, or
+provider credentials.
 
 Before opening the native save dialog, the UI shows the exact proposed
 filename, format, conversation count, message count, attachment count, and

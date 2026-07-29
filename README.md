@@ -41,6 +41,8 @@ search index on your device.
 - Read the active conversation path and recover alternate branches.
 - Export the active path as Markdown, PDF, or plain text with a readable
   title-based filename.
+- Select conversations across pages or select the complete current filtered
+  result, then export the bounded set as one ordered document.
 - Preview supported local text, PDF, image, audio, and video attachments
   through a constrained loopback server.
 - Cancel and resume indexing.
@@ -154,6 +156,14 @@ conversation list and choose **Export selected…**. A manual selection persists
 across pages and filters and can contain up to 100 conversations. The combined
 document uses each conversation's default active path in selection order and a
 filename such as `Selected-conversations-12.md`.
+
+To collect the complete current result, choose **Select all matching**. This
+mode is visibly distinct from manual selection, ignores pagination, and is
+available when the submitted search and filters match 100 conversations or
+fewer. Changing a search or filter clears the all-matching selection. The
+backend re-evaluates the query before saving and refuses to open the native
+save dialog if the query, ordered result set, format, or serialized document
+changed after the estimate.
 
 Every document contains only the chosen active path for each conversation,
 with message order, roles, and timestamps; alternate branches are not
