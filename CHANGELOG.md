@@ -56,6 +56,8 @@ All notable user-facing changes are documented here. This project follows
   all text formats visibly encode terminal control characters.
 - Attachment copies use a passive detected extension; unknown content uses
   `.bin` instead of restoring an executable source suffix.
+- Missing or rejected attachments use `.bin` instead of trusting an
+  export-supplied MIME claim that could mislabel the file type.
 - PDF generation is size-bounded and serialized to prevent concurrent exports
   from exhausting native rendering resources.
 

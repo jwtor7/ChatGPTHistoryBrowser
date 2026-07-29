@@ -51,7 +51,7 @@ pub fn resolve_attachment(
             key,
             display_name: attachment_display_name(
                 &projected.display_name,
-                projected.claimed_mime.as_deref(),
+                None,
                 None,
                 PreviewKind::Missing,
                 ordinal,
@@ -74,7 +74,7 @@ pub fn resolve_attachment(
             key,
             display_name: attachment_display_name(
                 &projected.display_name,
-                projected.claimed_mime.as_deref(),
+                None,
                 None,
                 PreviewKind::Unsupported,
                 ordinal,
@@ -707,6 +707,22 @@ mod tests {
     }
 
     #[test]
+    fn missing_attachments_do_not_trust_claimed_mime_for_file_type() {
+        let (_directory, root) = synthetic_root();
+        let projected = ProjectedAttachment {
+            reference: Some("file-synthetic-missing".to_string()),
+            display_name: "report.exe".to_string(),
+            claimed_mime: Some("image/png".to_string()),
+        };
+        let resolved =
+            resolve_attachment(&root, "conversation", "node", 0, &projected).expect("resolve");
+
+        assert_eq!(resolved.status, AttachmentStatus::Missing);
+        assert_eq!(resolved.detected_mime, None);
+        assert_eq!(resolved.display_name, "report.bin");
+    }
+
+    #[test]
     fn download_names_remove_header_and_path_characters() {
         assert_eq!(
             safe_download_name(
@@ -842,5 +858,6 @@ mod tests {
         assert_eq!(resolved.status, AttachmentStatus::Rejected);
         assert_eq!(resolved.preview_kind, PreviewKind::Unsupported);
         assert!(resolved.source_name.is_none());
+        assert_eq!(resolved.display_name, "Synthetic oversized attachment.bin");
     }
 }
