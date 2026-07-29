@@ -22,6 +22,7 @@ const VALID_SCOPES = new Set(['worktree', 'staged', 'tracked', 'build', 'all']);
 const BUILD_DIRECTORIES = ['dist', 'build', 'out', '.next', '.output'];
 const DEPENDENCY_DIRECTORIES = new Set(['node_modules', '.pnpm-store', '.yarn', '.npm']);
 const GENERATED_WORKTREE_DIRECTORIES = new Set([
+  '.code-review-graph',
   'dist',
   'target',
   'src-tauri/gen',

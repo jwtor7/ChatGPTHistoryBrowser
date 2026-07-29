@@ -33,9 +33,9 @@ The application has five sensitive boundaries:
    remain inert data and must not gain script or network capabilities.
 4. **Worktree to public Git.** Source control and CI are public disclosure
    boundaries. Ignore rules alone do not protect them.
-5. **Portable package to a destination chosen by the user.** An explicit local
-   export creates a new plaintext copy that is no longer protected by the
-   source archive's read-only boundary.
+5. **Conversation document to a destination chosen by the user.** An explicit
+   Markdown, PDF, or text export creates a new private copy that is no longer
+   protected by the source archive's read-only boundary.
 
 Protected assets include the source export, its derived index, local filesystem
 contents outside the selected root, the local server session capability,
@@ -140,28 +140,38 @@ slots, and a 64 MiB aggregate in-flight byte budget. Rust streams media from the
 already validated file handle instead of buffering the complete file. No
 response includes an absolute filesystem path.
 
-## Portable context export
+## Conversation document export
 
-Portable context export is an explicit user-initiated disclosure boundary. The
-application serializes only the selected active conversation path into a
-versioned provider-neutral JSON package with an embedded Markdown rendering.
-It preserves message order, normalized roles, timestamps, the selected leaf,
-and opaque branch provenance. It does not include attachment bytes or names,
-filesystem paths, index metadata, diagnostics, session capabilities, logs, or
-provider credentials.
+Conversation export is an explicit user-initiated disclosure boundary. The
+application serializes only the selected active conversation path as Markdown,
+PDF, or plain text. It preserves message order, normalized roles, and
+timestamps. It does not include attachment bytes or names, filesystem paths,
+source or branch identifiers, index metadata, diagnostics, session
+capabilities, logs, or provider credentials.
 
-Before opening the native save dialog, the UI shows the conversation, message,
-attachment, and exact serialized-byte counts. Cancelling either the in-app
-confirmation or native dialog is reported as cancelled and creates no file.
-The destination file is created with restrictive permissions on macOS and is
-never written beneath the source export by the application.
+Before opening the native save dialog, the UI shows the exact proposed
+title-based filename, format, message count, attachment count, and serialized
+byte count. A readable filename is useful but may reveal the conversation title
+through filesystem metadata, recent-file lists, backups, or sharing tools.
+Users should edit the destination name when the title itself is sensitive.
+
+Cancelling either the in-app confirmation or native dialog is reported as
+cancelled and creates no file. The chosen extension is enforced, the
+destination file is created with restrictive permissions on macOS, confirmed
+replacement is performed through an atomic same-directory rename, and the
+application never writes it beneath the selected source export.
+
+Markdown export encodes raw HTML and Markdown link/image delimiters so opening
+the saved document cannot silently activate embedded remote resources. All
+three formats replace non-printing terminal controls with visible Unicode code
+point labels. Attachment copies use only passive extensions selected from
+detected content; unknown content receives `.bin`.
 
 Export works entirely through the authenticated loopback API and native save
 dialog. It makes no outbound request and performs no direct provider upload.
-The package contains a warning that it is plaintext private data and that
-sharing or importing it transfers the selected content under the destination
-provider's policies. Provider-specific compatibility must not be claimed
-without a current, fixture-backed contract test.
+The dialog warns that the document contains private data, that its title-based
+filename may appear in recent files or backups, and that sharing or importing
+it transfers the selected content under the destination provider's policies.
 
 ## Local server and network model
 

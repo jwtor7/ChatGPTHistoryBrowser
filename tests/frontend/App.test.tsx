@@ -195,11 +195,20 @@ describe('History Browser frontend', () => {
     }
 
     const requestedUrls: string[] = [];
-    let portableSaveCalls = 0;
-    let resolvePortableEstimate: ((response: Response) => void) | undefined;
-    const portableEstimateResponse = new Promise<Response>((resolve) => {
-      resolvePortableEstimate = resolve;
+    let exportSaveCalls = 0;
+    let holdFirstPdfEstimate = true;
+    let initialExportEstimateReady = false;
+    let resolveInitialExportEstimate: ((response: Response) => void) | undefined;
+    const initialExportEstimateResponse = new Promise<Response>((resolve) => {
+      resolveInitialExportEstimate = resolve;
     });
+    const initialExportEstimate = {
+      conversationCount: 1,
+      messageCount: 1,
+      attachmentCount: 0,
+      byteSize: 2_048,
+      fileName: `${items[0].title.replaceAll(' ', '-')}.md`,
+    };
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const url = urlOf(input);
@@ -209,6 +218,17 @@ describe('History Browser frontend', () => {
         }
         if (url.startsWith('/api/conversations?')) {
           const params = new URL(url, 'http://localhost').searchParams;
+          if (params.get('attachmentKind') === 'audio') {
+            return Promise.resolve(
+              json({
+                items: [],
+                page: 0,
+                pageSize: 50,
+                total: 0,
+                hasMore: false,
+              }),
+            );
+          }
           if (params.get('search') === 'broken query') {
             return Promise.reject(new Error('Synthetic list failure'));
           }
@@ -244,12 +264,36 @@ describe('History Browser frontend', () => {
             }),
           );
         }
-        if (url.startsWith(`/api/conversations/${items[0].id}/portable-export`)) {
+        if (url.startsWith(`/api/conversations/${items[0].id}/export?`)) {
+          const format = new URL(url, 'http://localhost').searchParams.get('format') ?? 'md';
           if (init?.method === 'POST') {
-            portableSaveCalls += 1;
+            exportSaveCalls += 1;
             return Promise.resolve(json({ saved: false }));
           }
-          return portableEstimateResponse;
+          if (format === 'md') {
+            return initialExportEstimateReady
+              ? Promise.resolve(json(initialExportEstimate))
+              : initialExportEstimateResponse;
+          }
+          if (format === 'pdf' && holdFirstPdfEstimate) {
+            holdFirstPdfEstimate = false;
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              );
+            });
+          }
+          return Promise.resolve(
+            json({
+              conversationCount: 1,
+              messageCount: 1,
+              attachmentCount: 0,
+              byteSize: format === 'pdf' ? 4_096 : 1_024,
+              fileName: `${items[0].title.replaceAll(' ', '-')}.${format}`,
+            }),
+          );
         }
         if (url.includes('?leaf=synthetic-branch-leaf')) {
           return Promise.resolve(json(detail(true)));
@@ -285,7 +329,17 @@ describe('History Browser frontend', () => {
       url.startsWith('/api/conversations?'),
     ).length;
     await user.click(screen.getByText(/^filters$/i));
-    await user.click(screen.getByRole('button', { name: /clear filters/i }));
+    await user.selectOptions(screen.getByRole('combobox', { name: /file type/i }), 'audio');
+    await waitFor(() => {
+      expect(requestedUrls.some((url) => url.includes('attachmentKind=audio'))).toBe(true);
+    });
+    expect(await screen.findByText(/file type is set to audio/i)).toBeVisible();
+    expect(screen.getByText(/1 active.*audio/i)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: /clear file type/i }));
+    await waitFor(() => {
+      expect(container.querySelector('.result-summary')).toHaveTextContent('120 conversations');
+    });
+    await user.click(screen.getByRole('button', { name: /clear search and filters/i }));
     await waitFor(() => {
       expect(
         requestedUrls.filter((url) => url.startsWith('/api/conversations?')).length,
@@ -314,40 +368,61 @@ describe('History Browser frontend', () => {
     await user.click(screen.getByRole('button', { name: /branch 1/i }));
     expect(await screen.findByText(/conspicuously fictional alternate branch/i)).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: /export active path/i }));
-    await waitFor(() => {
-      expect(requestedUrls.some((url) => url.includes('/portable-export'))).toBe(true);
-    });
-    await user.clear(search);
-    await user.type(search, 'switch target');
-    await user.click(screen.getByRole('button', { name: /^search$/i }));
-    expect(await screen.findByRole('heading', { name: items[1].title })).toBeVisible();
-    resolvePortableEstimate?.(
-      json({
-        conversationCount: 1,
-        messageCount: 1,
-        attachmentCount: 0,
-        byteSize: 2_048,
-      }),
-    );
+    await user.click(screen.getByRole('button', { name: /export current path/i }));
     const exportDialog = await screen.findByRole('dialog', {
-      name: /export this active path/i,
+      name: new RegExp(`export.*${items[0].title}`, 'i'),
     });
-    expect(exportDialog).toHaveTextContent(/provider-neutral json package/i);
-    expect(exportDialog).toHaveTextContent(items[0].title);
-    expect(exportDialog).toHaveTextContent(/2\.0 KB/i);
-    expect(exportDialog).toHaveTextContent(/0 detected, none included/i);
-    await user.click(
-      within(exportDialog).getByRole('button', { name: /choose save location/i }),
+    expect(within(exportDialog).getByRole('button', { name: /cancel/i })).toBeEnabled();
+    expect(exportDialog).toHaveTextContent(/preparing filename/i);
+    await waitFor(() => {
+      expect(
+        requestedUrls.some((url) => url.includes('/export?') && url.includes('format=md')),
+      ).toBe(true);
+    });
+    initialExportEstimateReady = true;
+    resolveInitialExportEstimate?.(json(initialExportEstimate));
+    expect(exportDialog).toHaveTextContent(/contains private conversation data/i);
+    expect(exportDialog).toHaveTextContent(/filename uses the conversation title/i);
+    expect(exportDialog).toHaveTextContent(/sharing or importing the saved file/i);
+    expect(exportDialog).toHaveTextContent(
+      /only the currently selected message path is included/i,
     );
+    expect(exportDialog).toHaveTextContent(/alternate branches and attachments aren.t/i);
+    expect(exportDialog).not.toHaveTextContent(/provider-neutral|portable json/i);
+    await waitFor(() =>
+      expect(within(exportDialog).getByRole('radio', { name: /markdown/i })).toHaveFocus(),
+    );
+    expect(
+      await within(exportDialog).findByText(`${items[0].title.replaceAll(' ', '-')}.md`),
+    ).toBeVisible();
+    expect(exportDialog).toHaveTextContent(/2\.0 KB/i);
+    expect(exportDialog).toHaveTextContent(/0 found, none included/i);
+    await user.click(within(exportDialog).getByRole('radio', { name: /^pdf/i }));
+    expect(within(exportDialog).getByRole('button', { name: /cancel/i })).toBeEnabled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(exportDialog).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent(/export cancelled/i);
+
+    await user.click(screen.getByRole('button', { name: /export current path/i }));
+    const reopenedExportDialog = await screen.findByRole('dialog', {
+      name: new RegExp(`export.*${items[0].title}`, 'i'),
+    });
+    await user.click(within(reopenedExportDialog).getByRole('radio', { name: /^pdf/i }));
+    expect(
+      await within(reopenedExportDialog).findByText(
+        `${items[0].title.replaceAll(' ', '-')}.pdf`,
+      ),
+    ).toBeVisible();
+    expect(requestedUrls.some((url) => url.includes('/export?format=pdf'))).toBe(true);
+    await user.click(within(reopenedExportDialog).getByRole('button', { name: /save pdf/i }));
     expect(await screen.findByRole('status')).toHaveTextContent(
       /export cancelled.*no file was created/i,
     );
-    expect(portableSaveCalls).toBe(1);
+    expect(exportSaveCalls).toBe(1);
     expect(
       requestedUrls.some(
         (url) =>
-          url.includes('/portable-export?leaf=synthetic-branch-leaf') &&
+          url.includes('/export?format=pdf&leaf=synthetic-branch-leaf') &&
           url.startsWith('/api/'),
       ),
     ).toBe(true);

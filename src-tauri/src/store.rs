@@ -21,15 +21,15 @@ use crate::{
     error::{AppResult, ErrorCode},
     json_stream::{JsonStreamLimits, stream_json_array},
     models::{
-        AttachmentStatus, AttachmentView, BranchView, ConversationDetail, ConversationListItem,
-        ConversationPage, ConversationQuery, DiagnosticView, MessageView, PreviewKind,
-        ProjectedConversation,
+        AttachmentKindFilter, AttachmentStatus, AttachmentView, BranchView, ConversationDetail,
+        ConversationListItem, ConversationPage, ConversationQuery, DiagnosticView, MessageView,
+        PreviewKind, ProjectedConversation,
     },
     safe_root::{SafeExportRoot, SafeFileEntry},
 };
 
 const INDEX_MARKER: &str = "chatgpt-history-browser-index-v1\n";
-const INDEX_PROJECTION_VERSION: &str = "4";
+const INDEX_PROJECTION_VERSION: &str = "5";
 const MAX_PAGE_SIZE: u32 = 100;
 const MAX_PAGE_NUMBER: u32 = 100_000;
 const MAX_SEARCH_BYTES: usize = 512;
@@ -182,6 +182,10 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS attachments_message
                 ON attachments(conversation_key, node_id, ordinal);
+            CREATE INDEX IF NOT EXISTS attachments_kind
+                ON attachments(preview_kind, conversation_key);
+            CREATE INDEX IF NOT EXISTS attachments_detected_kind
+                ON attachments(detected_mime, status, conversation_key);
 
             CREATE TABLE IF NOT EXISTS diagnostics (
                 conversation_key TEXT NOT NULL,
@@ -500,6 +504,38 @@ impl Store {
             conditions.push(format!(
                 "c.has_attachments = {}",
                 i32::from(has_attachments)
+            ));
+        }
+        if let Some(attachment_kind) = query.attachment_kind {
+            let kind_condition = match attachment_kind {
+                AttachmentKindFilter::Image => "kind_attachment.detected_mime LIKE 'image/%'",
+                AttachmentKindFilter::Audio => "kind_attachment.detected_mime LIKE 'audio/%'",
+                AttachmentKindFilter::Video => "kind_attachment.detected_mime LIKE 'video/%'",
+                AttachmentKindFilter::Pdf => {
+                    "kind_attachment.detected_mime = 'application/pdf'"
+                }
+                AttachmentKindFilter::Text => "kind_attachment.detected_mime LIKE 'text/%'",
+                AttachmentKindFilter::Missing => "kind_attachment.status = 'missing'",
+                AttachmentKindFilter::Other => {
+                    "kind_attachment.status <> 'missing'
+                    AND (
+                        kind_attachment.detected_mime IS NULL
+                        OR (
+                            kind_attachment.detected_mime NOT LIKE 'image/%'
+                            AND kind_attachment.detected_mime NOT LIKE 'audio/%'
+                            AND kind_attachment.detected_mime NOT LIKE 'video/%'
+                            AND kind_attachment.detected_mime NOT LIKE 'text/%'
+                            AND kind_attachment.detected_mime <> 'application/pdf'
+                        )
+                    )"
+                }
+            };
+            conditions.push(format!(
+                "EXISTS (
+                    SELECT 1 FROM attachments kind_attachment
+                    WHERE kind_attachment.conversation_key = c.conversation_key
+                    AND ({kind_condition})
+                )"
             ));
         }
         if let Some(role) = query.role.as_deref().filter(|role| is_supported_role(role)) {
@@ -1663,6 +1699,7 @@ mod tests {
                 archived: Some(false),
                 starred: Some(true),
                 has_attachments: Some(false),
+                attachment_kind: None,
             })
             .expect("query");
         assert_eq!(page.total, 1);
@@ -1762,6 +1799,123 @@ mod tests {
             detail.messages[0].attachments[0].status,
             AttachmentStatus::Missing
         ));
+    }
+
+    #[test]
+    fn attachment_kind_filter_uses_detected_file_categories() {
+        let directory = TempDir::new().expect("temp directory");
+        let export = directory.path().join("export");
+        fs::create_dir(&export).expect("create export");
+        let shard = json!([
+            {
+                "title": "Synthetic audio conversation",
+                "current_node": "audio-node",
+                "mapping": {
+                    "audio-node": {
+                        "parent": null,
+                        "children": [],
+                        "message": {
+                            "id": "audio-message",
+                            "author": {"role": "user"},
+                            "content": {
+                                "parts": [{
+                                    "asset_pointer": "file-service://file-synthetic-audio",
+                                    "name": "Attachment",
+                                    "mime_type": "application/octet-stream"
+                                }]
+                            }
+                        }
+                    }
+                }
+            },
+            {
+                "title": "Synthetic missing-file conversation",
+                "current_node": "missing-node",
+                "mapping": {
+                    "missing-node": {
+                        "parent": null,
+                        "children": [],
+                        "message": {
+                            "id": "missing-message",
+                            "author": {"role": "user"},
+                            "content": {
+                                "parts": [{
+                                    "asset_pointer": "file-service://file-synthetic-missing",
+                                    "name": "Missing document",
+                                    "mime_type": "application/pdf"
+                                }]
+                            }
+                        }
+                    }
+                }
+            }
+        ]);
+        fs::write(
+            export.join("conversations-000.json"),
+            serde_json::to_vec(&shard).expect("serialize shard"),
+        )
+        .expect("write shard");
+        let mut wav = vec![0_u8; 44 + 64];
+        wav[0..4].copy_from_slice(b"RIFF");
+        wav[4..8].copy_from_slice(&(100_u32).to_le_bytes());
+        wav[8..12].copy_from_slice(b"WAVE");
+        wav[12..16].copy_from_slice(b"fmt ");
+        wav[16..20].copy_from_slice(&(16_u32).to_le_bytes());
+        wav[20..22].copy_from_slice(&(1_u16).to_le_bytes());
+        wav[22..24].copy_from_slice(&(1_u16).to_le_bytes());
+        wav[24..28].copy_from_slice(&(8_000_u32).to_le_bytes());
+        wav[28..32].copy_from_slice(&(8_000_u32).to_le_bytes());
+        wav[32..34].copy_from_slice(&(1_u16).to_le_bytes());
+        wav[34..36].copy_from_slice(&(8_u16).to_le_bytes());
+        wav[36..40].copy_from_slice(b"data");
+        wav[40..44].copy_from_slice(&(64_u32).to_le_bytes());
+        fs::write(export.join("file-synthetic-audio.dat"), wav).expect("write audio");
+
+        let root = SafeExportRoot::select(&export).expect("select root");
+        let cache = directory.path().join("cache");
+        let store = Store::for_export_with_cache_root(&root, &cache).expect("store");
+        store
+            .index_shard(&root, &root.shards()[0], &AtomicBool::new(false), |_| {})
+            .expect("index");
+        store
+            .open_connection()
+            .expect("open store")
+            .execute(
+                "UPDATE attachments
+                 SET preview_kind = 'unsupported'
+                 WHERE detected_mime LIKE 'audio/%'",
+                [],
+            )
+            .expect("simulate a detected audio file that is save-only");
+
+        let audio = store
+            .query_conversations(&ConversationQuery {
+                attachment_kind: Some(AttachmentKindFilter::Audio),
+                ..ConversationQuery::default()
+            })
+            .expect("audio query");
+        assert_eq!(audio.total, 1);
+        assert_eq!(audio.items[0].title, "Synthetic audio conversation");
+
+        let other = store
+            .query_conversations(&ConversationQuery {
+                attachment_kind: Some(AttachmentKindFilter::Other),
+                ..ConversationQuery::default()
+            })
+            .expect("other query");
+        assert_eq!(other.total, 0);
+
+        let missing = store
+            .query_conversations(&ConversationQuery {
+                attachment_kind: Some(AttachmentKindFilter::Missing),
+                ..ConversationQuery::default()
+            })
+            .expect("missing query");
+        assert_eq!(missing.total, 1);
+        assert_eq!(
+            missing.items[0].title,
+            "Synthetic missing-file conversation"
+        );
     }
 
     #[test]
@@ -2111,6 +2265,7 @@ mod tests {
                 archived: None,
                 starred: None,
                 has_attachments: None,
+                attachment_kind: None,
             })
             .expect("query");
         assert_eq!(page.total, 1);

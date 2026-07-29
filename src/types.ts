@@ -95,12 +95,18 @@ export interface ConversationDetail {
   diagnostics: DiagnosticView[];
 }
 
-export interface PortableExportEstimate {
+export type ConversationExportFormat = 'md' | 'pdf' | 'txt';
+
+export interface ConversationExportEstimate {
   conversationCount: number;
   messageCount: number;
   attachmentCount: number;
   byteSize: number;
+  fileName: string;
 }
+
+export type AttachmentKindFilter =
+  '' | 'image' | 'audio' | 'video' | 'pdf' | 'text' | 'other' | 'missing';
 
 export interface ConversationFilters {
   page: number;
@@ -112,6 +118,7 @@ export interface ConversationFilters {
   archived: '' | 'true' | 'false';
   starred: '' | 'true' | 'false';
   hasAttachments: '' | 'true' | 'false';
+  attachmentKind: AttachmentKindFilter;
 }
 
 export interface ApiErrorBody {

@@ -35,11 +35,14 @@ search index on your device.
 ### What you can do
 
 - Search years of conversations in milliseconds.
-- Filter by date, role, archive state, starred state, and attachments.
+- Filter by date, role, archive state, starred state, attachment presence, and
+  detected file type: images, audio, video, PDFs, text, other files, or
+  missing.
 - Read the active conversation path and recover alternate branches.
-- Export the active path as a provider-neutral, offline portable context package.
-- Preview supported local text, PDF, PNG, and JPEG attachments through a
-  constrained loopback server.
+- Export the active path as Markdown, PDF, or plain text with a readable
+  title-based filename.
+- Preview supported local text, PDF, image, audio, and video attachments
+  through a constrained loopback server.
 - Cancel and resume indexing.
 - Delete the disposable local index without touching the export.
 
@@ -135,25 +138,29 @@ server. The Tauri webview receives only projected conversation data through a
 per-launch capability token. Attachment paths and file signatures are
 revalidated before preview or save operations.
 
-## Portable context export
+When an attachment copy is saved, its suggested filename is sanitized and its
+extension is derived from the detected file type. Generic source labels become
+readable names such as `Audio attachment 1.wav`; source files are never
+renamed. Unknown content uses `.bin`, while active text-like source suffixes
+are replaced with the passive `.txt` extension.
 
-Open a conversation and choose **Export active path** to save a local
-`.portable.json` package. The package includes:
+## Conversation export
 
-- a versioned provider-neutral manifest;
-- the selected active path with message order, roles, timestamps, and branch
-  provenance;
-- a readable Markdown rendering; and
-- a reusable prompt for importing the context carefully into another
-  assistant.
+Open a conversation and choose **Export current path…**, then select Markdown,
+PDF, or plain text. The app shows the exact filename before saving. A title
+such as `**Exceptional Opportunity Scan` becomes
+`Exceptional-Opportunity-Scan.md`, `.pdf`, or `.txt`.
 
-The confirmation shows the exact package size and attachment count before the
-native macOS save dialog opens. Attachments are excluded, local paths and
-session capabilities are never included, and the app does not upload the
-package or claim provider-specific compatibility.
+The document contains only the selected message path, with message order,
+roles, and timestamps; alternate branches are not included. The confirmation
+shows the exact serialized size and attachment count before the native macOS
+save dialog opens. Attachment bytes and names, local paths, internal
+identifiers, and session capabilities are excluded. The chosen extension is
+enforced even if the destination name is edited.
 
-The saved package is plaintext private data. If you import or share it, the
-selected conversation becomes subject to the destination provider’s policies.
+Export runs entirely on the device and makes no outbound request. The saved
+document contains private data. If you import or share it, the selected
+conversation becomes subject to the destination provider’s policies.
 
 ## Build from source
 

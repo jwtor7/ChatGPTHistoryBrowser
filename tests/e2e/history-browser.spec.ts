@@ -73,7 +73,7 @@ function conversationDetail(branch: boolean) {
               },
               {
                 id: 'synthetic-unsupported-attachment',
-                displayName: 'fictional-active-format.html',
+                displayName: 'fictional-active-format.txt',
                 claimedMime: 'text/html',
                 detectedMime: 'text/html',
                 byteSize: 44,
@@ -112,7 +112,7 @@ function conversationDetail(branch: boolean) {
   };
 }
 
-async function installSameOriginApi(page: Page) {
+async function installSameOriginApi(page: Page, exportSelected = true) {
   const offOriginRequests: string[] = [];
   const apiRequests: URL[] = [];
 
@@ -153,10 +153,22 @@ async function installSameOriginApi(page: Page) {
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
-          exportSelected: true,
-          shardCount: 4,
-          attachmentFileCount: 2,
-          index: INDEX,
+          exportSelected,
+          shardCount: exportSelected ? 4 : 0,
+          attachmentFileCount: exportSelected ? 2 : 0,
+          index: exportSelected
+            ? INDEX
+            : {
+                ...INDEX,
+                phase: 'idle',
+                shardsTotal: 0,
+                shardsComplete: 0,
+                bytesTotal: 0,
+                bytesProcessed: 0,
+                conversationsIndexed: 0,
+                conversationsSkipped: 0,
+                diagnostics: 0,
+              },
         }),
       });
       return;
@@ -183,6 +195,28 @@ async function installSameOriginApi(page: Page) {
         contentType: 'application/json',
         body: JSON.stringify(
           conversationDetail(url.searchParams.get('leaf') === 'synthetic-alternate-leaf'),
+        ),
+      });
+      return;
+    }
+
+    if (url.pathname === `/api/conversations/${ITEMS[0].id}/export`) {
+      const format = url.searchParams.get('format') ?? 'md';
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          request.method() === 'POST'
+            ? {
+                saved: true,
+                fileName: `Fictional-Lantern-Atlas-1.${format}`,
+              }
+            : {
+                conversationCount: 1,
+                messageCount: 2,
+                attachmentCount: 2,
+                byteSize: format === 'pdf' ? 4_096 : 2_048,
+                fileName: `Fictional-Lantern-Atlas-1.${format}`,
+              },
         ),
       });
       return;
@@ -226,6 +260,33 @@ async function installSameOriginApi(page: Page) {
   return { apiRequests, offOriginRequests };
 }
 
+test('production onboarding presents the branded local-only entry point', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const observed = await installSameOriginApi(page, false);
+
+  await page.goto(`/#token=${TOKEN}`);
+
+  await expect(
+    page.getByRole('heading', {
+      name: /browse your chatgpt export without uploading it/i,
+    }),
+  ).toBeVisible();
+  await expect(page.locator('.onboarding-brand .brand-mark img')).toBeVisible();
+  await expect(page.locator('.trust-artwork')).toBeVisible();
+  await expect(page.getByRole('button', { name: /choose extracted export/i })).toBeVisible();
+
+  if (process.env.GENERATE_SYNTHETIC_SCREENSHOT === '1') {
+    await page.waitForTimeout(800);
+    await page.screenshot({
+      path: 'docs/images/history-browser-onboarding.png',
+      fullPage: true,
+    });
+  }
+
+  expect(observed.offOriginRequests).toEqual([]);
+  expect(observed.apiRequests.every((url) => url.origin === ORIGIN)).toBe(true);
+});
+
 test('production build browses safely with same-origin mocked APIs only', async ({ page }) => {
   const observed = await installSameOriginApi(page);
 
@@ -247,6 +308,16 @@ test('production build browses safely with same-origin mocked APIs only', async 
   await expect(page.locator('.message-content a[href]')).toHaveCount(0);
   await expect(page.locator('.conversation-row')).not.toHaveCount(50);
 
+  await page.getByText(/^filters$/i).click();
+  await page.getByRole('combobox', { name: /file type/i }).selectOption('audio');
+  await expect
+    .poll(() =>
+      observed.apiRequests.some((url) => url.searchParams.get('attachmentKind') === 'audio'),
+    )
+    .toBe(true);
+  await expect(page.getByText(/1 active.*audio/i)).toBeVisible();
+  await page.getByRole('button', { name: /clear search and filters/i }).click();
+
   if (process.env.GENERATE_SYNTHETIC_SCREENSHOT === '1') {
     await page.waitForTimeout(800);
     await page.screenshot({
@@ -261,6 +332,31 @@ test('production build browses safely with same-origin mocked APIs only', async 
 
   await page.getByRole('button', { name: /branch 1/i }).click();
   await expect(page.getByText(/alternate path is conspicuously fictional/i)).toBeVisible();
+
+  await page.getByRole('button', { name: /export current path/i }).click();
+  const exportDialog = page.getByRole('dialog', { name: /export.*fictional lantern atlas 1/i });
+  await expect(exportDialog).toBeVisible();
+  await expect(exportDialog.getByText(/contains private conversation data/i)).toBeVisible();
+  await expect(exportDialog.getByText(/filename uses the conversation title/i)).toBeVisible();
+  await expect(
+    exportDialog.getByText(/only the currently selected message path/i),
+  ).toBeVisible();
+  await expect(exportDialog.getByText(/sharing or importing the saved file/i)).toBeVisible();
+  await expect(exportDialog.getByText('Fictional-Lantern-Atlas-1.md')).toBeVisible();
+  await expect(exportDialog.getByRole('radio', { name: /markdown/i })).toBeFocused();
+  await exportDialog.getByRole('radio', { name: /plain text/i }).click();
+  await expect(exportDialog.getByText('Fictional-Lantern-Atlas-1.txt')).toBeVisible();
+  const plainTextRadio = exportDialog.getByRole('radio', { name: /plain text/i });
+  const savePlainText = exportDialog.getByRole('button', { name: /save plain text/i });
+  await expect(plainTextRadio).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(savePlainText).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(plainTextRadio).toBeFocused();
+  await savePlainText.click();
+  await expect(page.getByRole('status')).toContainText(
+    'Saved as Fictional-Lantern-Atlas-1.txt',
+  );
 
   const search = page.getByRole('searchbox', {
     name: /search conversations/i,
@@ -285,6 +381,7 @@ test('mobile layout opens a conversation and returns to the virtualized list', a
   await page.goto(`/#token=${TOKEN}`);
 
   await expect(page.getByRole('list', { name: /conversations/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /rebuild index/i })).toBeVisible();
   await page
     .locator('.conversation-row')
     .filter({ has: page.getByText(ITEMS[0].title, { exact: true }) })
@@ -292,6 +389,23 @@ test('mobile layout opens a conversation and returns to the virtualized list', a
 
   await expect(page.getByRole('heading', { name: ITEMS[0].title })).toBeVisible();
   await expect(page.getByRole('button', { name: /conversations/i })).toBeVisible();
+
+  await page.getByRole('button', { name: /export current path/i }).click();
+  const exportDialog = page.getByRole('dialog', {
+    name: /export.*fictional lantern atlas 1/i,
+  });
+  await expect(exportDialog).toBeVisible();
+  await expect(exportDialog.getByRole('radio', { name: /markdown/i })).toBeVisible();
+  await expect(exportDialog.getByRole('radio', { name: /pdf/i })).toBeVisible();
+  await expect(exportDialog.getByRole('radio', { name: /plain text/i })).toBeVisible();
+  const dialogBox = await exportDialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
+  expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(390);
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(844);
+  await exportDialog.getByRole('button', { name: /cancel/i }).click();
+
   await page.getByRole('button', { name: /conversations/i }).click();
   await expect(page.getByRole('list', { name: /conversations/i })).toBeVisible();
 

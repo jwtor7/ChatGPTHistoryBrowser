@@ -59,6 +59,19 @@ pub struct ConversationQuery {
     pub archived: Option<bool>,
     pub starred: Option<bool>,
     pub has_attachments: Option<bool>,
+    pub attachment_kind: Option<AttachmentKindFilter>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKindFilter {
+    Image,
+    Audio,
+    Video,
+    Pdf,
+    Text,
+    Other,
+    Missing,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -25,7 +25,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::Rng;
+use rand::RngExt;
 use serde::Serialize;
 use subtle::ConstantTimeEq;
 use tokio::{
@@ -40,17 +40,21 @@ use tower_http::{
 
 use crate::{
     attachments::{
-        MAX_INLINE_MEDIA_BYTES, open_validated_preview, read_text_preview, safe_download_name,
+        MAX_INLINE_MEDIA_BYTES, open_validated_preview, read_text_preview,
+        safe_download_name_for_detected_type,
     },
     error::{AppError, AppResult, ErrorCode},
     indexer::{ArchiveSession, IndexCoordinator},
     models::{AppStatus, ConversationQuery, ExportValidation, IndexProgress, PreviewKind},
-    portable_export::{PortableExportEstimate, portable_file_name, serialize_portable_context},
+    portable_export::{
+        ConversationExportEstimate, ConversationExportFormat, serialize_conversation_export,
+    },
     safe_root::SafeExportRoot,
 };
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_CONCURRENT_PREVIEWS: usize = 4;
+const MAX_CONCURRENT_PDF_EXPORTS: usize = 1;
 const PREVIEW_BUDGET_UNIT: u64 = 1024 * 1024;
 const PREVIEW_BUDGET_UNITS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,6 +75,7 @@ pub struct ServerState {
     indexer: IndexCoordinator,
     preview_slots: Arc<Semaphore>,
     preview_bytes: Arc<Semaphore>,
+    pdf_export_slots: Arc<Semaphore>,
     main_thread_dispatcher: Option<MainThreadDispatcher>,
 }
 
@@ -106,6 +111,7 @@ impl ServerState {
             indexer: IndexCoordinator::default(),
             preview_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_PREVIEWS)),
             preview_bytes: Arc::new(Semaphore::new(PREVIEW_BUDGET_UNITS)),
+            pdf_export_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_PDF_EXPORTS)),
             main_thread_dispatcher: None,
         }
     }
@@ -149,7 +155,7 @@ pub fn bind_loopback(
     }
 
     let mut token_bytes = [0_u8; 32];
-    rand::rng().fill_bytes(&mut token_bytes);
+    rand::rng().fill(&mut token_bytes);
     let token = URL_SAFE_NO_PAD.encode(token_bytes);
     let host = format!("127.0.0.1:{}", address.port());
     let origin = format!("http://{host}");
@@ -210,8 +216,8 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
         .route("/api/conversations", get(list_conversations))
         .route("/api/conversations/{id}", get(get_conversation))
         .route(
-            "/api/conversations/{id}/portable-export",
-            get(portable_export_estimate),
+            "/api/conversations/{id}/export",
+            get(conversation_export_estimate),
         )
         .route("/api/attachments/{id}/content", get(attachment_content))
         .route("/api/attachments/{id}/text", get(attachment_text))
@@ -223,8 +229,8 @@ fn build_router(state: ServerState, web_root: PathBuf) -> Router {
     let interactive_api = Router::new()
         .route("/api/export/pick", post(pick_export))
         .route(
-            "/api/conversations/{id}/portable-export",
-            post(save_portable_export),
+            "/api/conversations/{id}/export",
+            post(save_conversation_export),
         )
         .route("/api/attachments/{id}/save", post(save_attachment))
         .route_layer(middleware::from_fn_with_state(state.clone(), authorize_api));
@@ -429,6 +435,13 @@ struct DetailQuery {
     leaf: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationExportQuery {
+    leaf: Option<String>,
+    format: ConversationExportFormat,
+}
+
 async fn get_conversation(
     State(state): State<ServerState>,
     AxumPath(id): AxumPath<String>,
@@ -443,31 +456,37 @@ async fn get_conversation(
     Ok(Json(detail))
 }
 
-async fn portable_export_estimate(
+async fn conversation_export_estimate(
     State(state): State<ServerState>,
     AxumPath(id): AxumPath<String>,
-    Query(query): Query<DetailQuery>,
-) -> AppResult<Json<PortableExportEstimate>> {
-    let (_, estimate) = build_portable_export(&state, id, query.leaf).await?;
+    Query(query): Query<ConversationExportQuery>,
+) -> AppResult<Json<ConversationExportEstimate>> {
+    let (_, estimate) = build_conversation_export(&state, id, query.leaf, query.format).await?;
     Ok(Json(estimate))
 }
 
-async fn save_portable_export(
+async fn save_conversation_export(
     State(state): State<ServerState>,
     AxumPath(id): AxumPath<String>,
-    Query(query): Query<DetailQuery>,
+    Query(query): Query<ConversationExportQuery>,
 ) -> AppResult<Json<SaveResult>> {
     let root = state.session()?.root.clone();
-    let (bytes, _) = build_portable_export(&state, id.clone(), query.leaf).await?;
-    let file_name = portable_file_name(&id)?;
+    let (bytes, estimate) =
+        build_conversation_export(&state, id, query.leaf, query.format).await?;
+    let file_name = estimate.file_name;
+    let required_extension = query.format.extension().to_string();
     let dispatcher = state
         .main_thread_dispatcher
         .as_ref()
         .ok_or(AppError::Internal)?;
+    let dialog_name = file_name.clone();
+    let dialog_extension = required_extension.clone();
+    let format_label = query.format.human_label();
     let selected = build_future_on_main_thread(dispatcher, move || {
         let selection = rfd::AsyncFileDialog::new()
-            .set_title("Save portable conversation context")
-            .set_file_name(file_name)
+            .set_title(format!("Save conversation as {format_label}"))
+            .set_file_name(dialog_name)
+            .add_filter(format_label, &[dialog_extension])
             .save_file();
         async move {
             selection
@@ -477,36 +496,57 @@ async fn save_portable_export(
     })
     .await?;
     let Some(destination) = selected else {
-        return Ok(Json(SaveResult { saved: false }));
+        return Ok(Json(SaveResult {
+            saved: false,
+            file_name: None,
+        }));
     };
+    let destination = with_required_extension(destination, &required_extension);
+    let saved_file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or(file_name);
     tokio::task::spawn_blocking(move || -> AppResult<()> {
         if !root.write_destination_is_outside_root(&destination) {
             return Err(ErrorCode::PathRejected.into());
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(&destination)
-            && (metadata.file_type().is_symlink() || !metadata.is_file())
-        {
-            return Err(ErrorCode::PathRejected.into());
-        }
-        let mut target = create_private_file(&destination)?;
-        target.write_all(&bytes).map_err(|_| ErrorCode::Internal)?;
-        target.sync_all().map_err(|_| ErrorCode::Internal)?;
-        Ok(())
+        write_private_destination(&destination, |target| {
+            target.write_all(&bytes).map_err(|_| ErrorCode::Internal)?;
+            Ok(())
+        })
     })
     .await
     .map_err(|_| AppError::Internal)??;
-    Ok(Json(SaveResult { saved: true }))
+    Ok(Json(SaveResult {
+        saved: true,
+        file_name: Some(saved_file_name),
+    }))
 }
 
-async fn build_portable_export(
+async fn build_conversation_export(
     state: &ServerState,
     id: String,
     selected_leaf: Option<String>,
-) -> AppResult<(Vec<u8>, PortableExportEstimate)> {
+    format: ConversationExportFormat,
+) -> AppResult<(Vec<u8>, ConversationExportEstimate)> {
     let store = state.session()?.store.clone();
+    let pdf_permit = if format == ConversationExportFormat::Pdf {
+        Some(
+            state
+                .pdf_export_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Internal)?,
+        )
+    } else {
+        None
+    };
     tokio::task::spawn_blocking(move || {
+        let _pdf_permit = pdf_permit;
         let detail = store.conversation_detail(&id, selected_leaf.as_deref())?;
-        serialize_portable_context(&detail)
+        serialize_conversation_export(&detail, format)
     })
     .await
     .map_err(|_| AppError::Internal)?
@@ -523,6 +563,46 @@ fn create_private_file(path: &Path) -> AppResult<std::fs::File> {
     options
         .open(path)
         .map_err(|_| ErrorCode::PathRejected.into())
+}
+
+fn write_private_destination(
+    destination: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> AppResult<()>,
+) -> AppResult<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(destination)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(ErrorCode::PathRejected.into());
+    }
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or(ErrorCode::PathRejected)?;
+    let parent_metadata =
+        std::fs::symlink_metadata(parent).map_err(|_| ErrorCode::PathRejected)?;
+    if !parent_metadata.is_dir() {
+        return Err(ErrorCode::PathRejected.into());
+    }
+
+    let mut random_bytes = [0_u8; 18];
+    rand::rng().fill(&mut random_bytes);
+    let temporary_name = format!(
+        ".chatgpt-history-browser-{}.tmp",
+        URL_SAFE_NO_PAD.encode(random_bytes)
+    );
+    let temporary_path = parent.join(temporary_name);
+    let mut temporary = create_private_file(&temporary_path)?;
+    let result = (|| {
+        write(&mut temporary)?;
+        temporary.sync_all().map_err(|_| ErrorCode::Internal)?;
+        drop(temporary);
+        std::fs::rename(&temporary_path, destination).map_err(|_| ErrorCode::PathRejected)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result
 }
 
 async fn attachment_content(
@@ -638,6 +718,7 @@ async fn attachment_text(
 #[serde(rename_all = "camelCase")]
 struct SaveResult {
     saved: bool,
+    file_name: Option<String>,
 }
 
 async fn save_attachment(
@@ -649,15 +730,34 @@ async fn save_attachment(
     let record = tokio::task::spawn_blocking(move || store.attachment_record(&id))
         .await
         .map_err(|_| AppError::Internal)??;
+    let source_root = session.root.clone();
+    let source_name = record.source_name;
+    let validated =
+        tokio::task::spawn_blocking(move || open_validated_preview(&source_root, &source_name))
+            .await
+            .map_err(|_| AppError::Internal)??;
     let dispatcher = state
         .main_thread_dispatcher
         .as_ref()
         .ok_or(AppError::Internal)?;
-    let download_name = safe_download_name(&record.display_name);
+    let download_name = safe_download_name_for_detected_type(
+        &record.display_name,
+        validated.detected_mime.as_deref(),
+        validated.detected_extension.as_deref(),
+        validated.preview_kind,
+    );
+    let required_extension = Path::new(&download_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("bin")
+        .to_string();
+    let dialog_name = download_name.clone();
+    let dialog_extension = required_extension.clone();
     let selected = build_future_on_main_thread(dispatcher, move || {
         let selection = rfd::AsyncFileDialog::new()
             .set_title("Save a copy of the attachment")
-            .set_file_name(download_name)
+            .set_file_name(dialog_name)
+            .add_filter("Detected file type", &[dialog_extension])
             .save_file();
         async move {
             selection
@@ -667,31 +767,42 @@ async fn save_attachment(
     })
     .await?;
     let Some(destination) = selected else {
-        return Ok(Json(SaveResult { saved: false }));
+        return Ok(Json(SaveResult {
+            saved: false,
+            file_name: None,
+        }));
     };
+    let destination = with_required_extension(destination, &required_extension);
+    let saved_file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or(download_name);
     let root = session.root.clone();
-    let source_name = record.source_name;
     tokio::task::spawn_blocking(move || -> AppResult<()> {
         if !root.write_destination_is_outside_root(&destination) {
             return Err(ErrorCode::PathRejected.into());
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(&destination)
-            && (metadata.file_type().is_symlink() || !metadata.is_file())
-        {
-            return Err(ErrorCode::PathRejected.into());
-        }
-        let mut source = root.open_attachment(&source_name)?;
-        let mut target = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)
-            .map_err(|_| ErrorCode::PathRejected)?;
-        std::io::copy(&mut source, &mut target).map_err(|_| ErrorCode::Internal)?;
-        Ok(())
+        let mut source = validated.file;
+        write_private_destination(&destination, |target| {
+            std::io::copy(&mut source, target).map_err(|_| ErrorCode::Internal)?;
+            Ok(())
+        })
     })
     .await
     .map_err(|_| AppError::Internal)??;
-    Ok(Json(SaveResult { saved: true }))
+    Ok(Json(SaveResult {
+        saved: true,
+        file_name: Some(saved_file_name),
+    }))
+}
+
+fn with_required_extension(mut path: PathBuf, extension: &str) -> PathBuf {
+    let current = path.extension().and_then(|value| value.to_str());
+    if !current.is_some_and(|value| value.eq_ignore_ascii_case(extension)) {
+        path.set_extension(extension);
+    }
+    path
 }
 
 fn validate_web_root(path: &Path) -> AppResult<()> {
@@ -998,6 +1109,82 @@ mod tests {
             acquire_preview_budget(&state, MAX_INLINE_MEDIA_BYTES).expect("full byte budget");
         assert!(acquire_preview_budget(&state, 1).is_err());
         drop(full_budget);
+    }
+
+    #[test]
+    fn save_destinations_keep_the_selected_export_extension() {
+        assert_eq!(
+            with_required_extension(PathBuf::from("/tmp/Synthetic recording"), "wav"),
+            PathBuf::from("/tmp/Synthetic recording.wav")
+        );
+        assert_eq!(
+            with_required_extension(PathBuf::from("/tmp/Synthetic notes.txt"), "pdf"),
+            PathBuf::from("/tmp/Synthetic notes.pdf")
+        );
+        assert_eq!(
+            with_required_extension(PathBuf::from("/tmp/Synthetic notes.MD"), "md"),
+            PathBuf::from("/tmp/Synthetic notes.MD")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_destination_atomically_replaces_a_confirmed_regular_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().expect("temp directory");
+        let destination = directory.path().join("Synthetic export.txt");
+        fs::write(&destination, "old content").expect("write old destination");
+
+        write_private_destination(&destination, |target| {
+            target
+                .write_all(b"replacement content")
+                .map_err(|_| ErrorCode::Internal)?;
+            Ok(())
+        })
+        .expect("replace destination");
+
+        assert_eq!(
+            fs::read_to_string(&destination).expect("read replacement"),
+            "replacement content"
+        );
+        assert_eq!(
+            fs::metadata(&destination)
+                .expect("replacement metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("read temp directory")
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_destination_rejects_an_existing_symlink() {
+        let directory = TempDir::new().expect("temp directory");
+        let outside = directory.path().join("outside.txt");
+        let destination = directory.path().join("destination.txt");
+        fs::write(&outside, "untouched").expect("write outside file");
+        std::os::unix::fs::symlink(&outside, &destination).expect("create symlink");
+
+        let result = write_private_destination(&destination, |target| {
+            target
+                .write_all(b"replacement")
+                .map_err(|_| ErrorCode::Internal)?;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(&outside).expect("read outside file"),
+            "untouched"
+        );
     }
 
     #[cfg(unix)]

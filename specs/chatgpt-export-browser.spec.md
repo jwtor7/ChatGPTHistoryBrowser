@@ -157,56 +157,59 @@ The SQLite database, FTS indexes, WAL files, staging generations, thumbnails, an
 
 ### 7.4 Browse, search, and filters
 
-| ID      | EARS pattern      | Requirement                                                                                                                          |
-| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| QRY-001 | Ubiquitous        | The system SHALL paginate conversation and search-result queries.                                                                    |
-| QRY-002 | Ubiquitous        | The system SHALL virtualize long conversation lists.                                                                                 |
-| QRY-003 | Event-driven      | When the user opens the browser, the system SHALL list available conversations by title and date without loading all message bodies. |
-| QRY-004 | Event-driven      | When the user submits a search, the system SHALL search both conversation titles and indexed message text.                           |
-| QRY-005 | Ubiquitous        | The system SHALL parse search input with a constrained grammar and bind every SQL value.                                             |
-| QRY-006 | Optional feature  | Where a source field exists, the system SHALL filter by date, role, archived state, starred state, and attachment presence.          |
-| QRY-007 | Optional feature  | Where a source field does not exist, the system SHALL identify the filter as unavailable rather than infer a value.                  |
-| QRY-008 | Event-driven      | When indexing activates another shard, the system SHALL make its conversations searchable without restarting the application.        |
-| QRY-009 | Unwanted behavior | If a query is invalid, then the system SHALL return `SEARCH_INVALID_QUERY` without exposing SQL or internal parser details.          |
-| QRY-010 | Ubiquitous        | The system SHALL apply deterministic ordering and bounded `page` and `pageSize` pagination to conversation queries.                  |
+| ID      | EARS pattern      | Requirement                                                                                                                                                                                     |
+| ------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| QRY-001 | Ubiquitous        | The system SHALL paginate conversation and search-result queries.                                                                                                                               |
+| QRY-002 | Ubiquitous        | The system SHALL virtualize long conversation lists.                                                                                                                                            |
+| QRY-003 | Event-driven      | When the user opens the browser, the system SHALL list available conversations by title and date without loading all message bodies.                                                            |
+| QRY-004 | Event-driven      | When the user submits a search, the system SHALL search both conversation titles and indexed message text.                                                                                      |
+| QRY-005 | Ubiquitous        | The system SHALL parse search input with a constrained grammar and bind every SQL value.                                                                                                        |
+| QRY-006 | Optional feature  | Where a source field exists, the system SHALL filter by date, role, archived state, starred state, attachment presence, and detected attachment type.                                           |
+| QRY-007 | Optional feature  | Where a source field does not exist, the system SHALL identify the filter as unavailable rather than infer a value.                                                                             |
+| QRY-008 | Event-driven      | When indexing activates another shard, the system SHALL make its conversations searchable without restarting the application.                                                                   |
+| QRY-009 | Unwanted behavior | If a query is invalid, then the system SHALL return `SEARCH_INVALID_QUERY` without exposing SQL or internal parser details.                                                                     |
+| QRY-010 | Ubiquitous        | The system SHALL apply deterministic ordering and bounded `page` and `pageSize` pagination to conversation queries.                                                                             |
+| QRY-011 | Event-driven      | When a detected attachment-type filter is active, the system SHALL show only conversations containing an image, audio, video, PDF, text, other/unsupported, or missing attachment of that type. |
 
 ### 7.5 Conversation reconstruction and rendering
 
-| ID       | EARS pattern      | Requirement                                                                                                                                                    |
-| -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CONV-001 | Event-driven      | When a conversation is opened, the system SHALL load only the bounded data required for that conversation view.                                                |
-| CONV-002 | Ubiquitous        | The system SHALL reconstruct the active path by walking parent references from `current_node`, then reversing the valid chain.                                 |
-| CONV-003 | Ubiquitous        | The system SHALL preserve mapping order as conversation order and SHALL NOT reorder the path solely by timestamps.                                             |
-| CONV-004 | Ubiquitous        | The system SHALL detect cycles, missing nodes, invalid parents, and excessive depth.                                                                           |
-| CONV-005 | Optional feature  | Where alternate child edges exist, the system SHALL expose alternate branches and their branch points.                                                         |
-| CONV-006 | Ubiquitous        | The system SHALL visually distinguish user, assistant, system, tool, and other roles.                                                                          |
-| CONV-007 | Ubiquitous        | The system SHALL preserve unknown roles as safely displayed metadata rather than dropping the message or failing the conversation.                             |
-| CONV-008 | Ubiquitous        | The system SHALL render Markdown and fenced code without enabling raw HTML.                                                                                    |
-| CONV-009 | Ubiquitous        | The system SHALL sanitize links, images, metadata labels, and code-language labels before rendering.                                                           |
-| CONV-010 | Unwanted behavior | If the active path is incomplete, then the system SHALL render the valid portion, show a warning, and expose available branches where possible.                |
-| CONV-011 | Unwanted behavior | If no usable message path exists, then the system SHALL show a recoverable malformed-conversation state instead of crashing.                                   |
-| CONV-012 | Ubiquitous        | The system SHALL render message content as text and structured safe components, never by executing export-provided HTML, JavaScript, CSS, or embedded objects. |
+| ID       | EARS pattern      | Requirement                                                                                                                                                                                     |
+| -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CONV-001 | Event-driven      | When a conversation is opened, the system SHALL load only the bounded data required for that conversation view.                                                                                 |
+| CONV-002 | Ubiquitous        | The system SHALL reconstruct the active path by walking parent references from `current_node`, then reversing the valid chain.                                                                  |
+| CONV-003 | Ubiquitous        | The system SHALL preserve mapping order as conversation order and SHALL NOT reorder the path solely by timestamps.                                                                              |
+| CONV-004 | Ubiquitous        | The system SHALL detect cycles, missing nodes, invalid parents, and excessive depth.                                                                                                            |
+| CONV-005 | Optional feature  | Where alternate child edges exist, the system SHALL expose alternate branches and their branch points.                                                                                          |
+| CONV-006 | Ubiquitous        | The system SHALL visually distinguish user, assistant, system, tool, and other roles.                                                                                                           |
+| CONV-007 | Ubiquitous        | The system SHALL preserve unknown roles as safely displayed metadata rather than dropping the message or failing the conversation.                                                              |
+| CONV-008 | Ubiquitous        | The system SHALL render Markdown and fenced code without enabling raw HTML.                                                                                                                     |
+| CONV-009 | Ubiquitous        | The system SHALL sanitize links, images, metadata labels, and code-language labels before rendering.                                                                                            |
+| CONV-010 | Unwanted behavior | If the active path is incomplete, then the system SHALL render the valid portion, show a warning, and expose available branches where possible.                                                 |
+| CONV-011 | Unwanted behavior | If no usable message path exists, then the system SHALL show a recoverable malformed-conversation state instead of crashing.                                                                    |
+| CONV-012 | Ubiquitous        | The system SHALL render message content as text and structured safe components, never by executing export-provided HTML, JavaScript, CSS, or embedded objects.                                  |
+| CONV-013 | Event-driven      | When the user exports a conversation, the system SHALL offer Markdown, PDF, and plain text; show the exact proposed title-based filename and size; and serialize only the selected active path. |
 
 ### 7.6 Attachments
 
-| ID      | EARS pattern      | Requirement                                                                                                                                                         |
-| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ATT-001 | Ubiquitous        | The system SHALL match attachment identifiers and metadata to local `.dat` candidates in Rust.                                                                      |
-| ATT-002 | Optional feature  | Where an original attachment name exists, the system SHALL display it as sanitized text without renaming the source file.                                           |
-| ATT-003 | Ubiquitous        | The system SHALL determine preview eligibility from file signature, bounded content inspection, and allowlist policy rather than extension or declared MIME alone.  |
-| ATT-004 | Optional feature  | Where a file is a verified PNG, JPEG, GIF, or WebP within preview limits, the system SHALL provide an inline image preview.                                         |
-| ATT-005 | Optional feature  | Where a verified audio or video container is supported by the platform WebView, the system SHALL provide a Range-backed media preview.                              |
-| ATT-006 | Optional feature  | Where a file is a verified PDF within preview limits, the system SHALL render pages through bundled offline PDF.js with scripting and external fetch disabled.      |
-| ATT-007 | Optional feature  | Where content is bounded valid text, source, CSV, or JSON, the system SHALL preview it as escaped text.                                                             |
-| ATT-008 | Ubiquitous        | The system SHALL NOT inline SVG, HTML, JavaScript, office macros, executables, or unknown formats.                                                                  |
-| ATT-009 | Unwanted behavior | If metadata and signature disagree, then the system SHALL use the safer detected policy and show `ATTACHMENT_TYPE_MISMATCH`.                                        |
-| ATT-010 | Unwanted behavior | If an attachment is missing, then the system SHALL show `ATTACHMENT_MISSING` without failing the conversation.                                                      |
-| ATT-011 | Unwanted behavior | If an attachment path escapes the selected root by traversal, alternate prefix, or symlink, then the system SHALL deny access and report `ATTACHMENT_OUTSIDE_ROOT`. |
-| ATT-012 | Ubiquitous        | The system SHALL reauthorize and re-resolve an opaque attachment identifier for every preview, copy, and open action.                                               |
-| ATT-013 | Ubiquitous        | The system SHALL support bounded single-range byte requests for large local media.                                                                                  |
-| ATT-014 | Event-driven      | When the user requests a recovered copy, the system SHALL show a native destination picker and copy bytes from an already authorized read-only source handle.       |
-| ATT-015 | Event-driven      | When the user requests external open, the system SHALL show a warning and call an argument-vector operating-system API without a shell.                             |
-| ATT-016 | Unwanted behavior | If safe inline preview is unavailable, then the system SHALL offer a clear copy or external-open fallback.                                                          |
+| ID      | EARS pattern      | Requirement                                                                                                                                                                                                                               |
+| ------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ATT-001 | Ubiquitous        | The system SHALL match attachment identifiers and metadata to local `.dat` candidates in Rust.                                                                                                                                            |
+| ATT-002 | Optional feature  | Where an original attachment name exists, the system SHALL display it as sanitized text without renaming the source file.                                                                                                                 |
+| ATT-003 | Ubiquitous        | The system SHALL determine preview eligibility from file signature, bounded content inspection, and allowlist policy rather than extension or declared MIME alone.                                                                        |
+| ATT-004 | Optional feature  | Where a file is a verified PNG, JPEG, GIF, or WebP within preview limits, the system SHALL provide an inline image preview.                                                                                                               |
+| ATT-005 | Optional feature  | Where a verified audio or video container is supported by the platform WebView, the system SHALL provide a Range-backed media preview.                                                                                                    |
+| ATT-006 | Optional feature  | Where a file is a verified PDF within preview limits, the system SHALL render pages through bundled offline PDF.js with scripting and external fetch disabled.                                                                            |
+| ATT-007 | Optional feature  | Where content is bounded valid text, source, CSV, or JSON, the system SHALL preview it as escaped text.                                                                                                                                   |
+| ATT-008 | Ubiquitous        | The system SHALL NOT inline SVG, HTML, JavaScript, office macros, executables, or unknown formats.                                                                                                                                        |
+| ATT-009 | Unwanted behavior | If metadata and signature disagree, then the system SHALL use the safer detected policy and show `ATTACHMENT_TYPE_MISMATCH`.                                                                                                              |
+| ATT-010 | Unwanted behavior | If an attachment is missing, then the system SHALL show `ATTACHMENT_MISSING` without failing the conversation.                                                                                                                            |
+| ATT-011 | Unwanted behavior | If an attachment path escapes the selected root by traversal, alternate prefix, or symlink, then the system SHALL deny access and report `ATTACHMENT_OUTSIDE_ROOT`.                                                                       |
+| ATT-012 | Ubiquitous        | The system SHALL reauthorize and re-resolve an opaque attachment identifier for every preview, copy, and open action.                                                                                                                     |
+| ATT-013 | Ubiquitous        | The system SHALL support bounded single-range byte requests for large local media.                                                                                                                                                        |
+| ATT-014 | Event-driven      | When the user requests a recovered copy, the system SHALL show a native destination picker with a sanitized meaningful filename and detected extension, then copy bytes from an already authorized read-only source handle.               |
+| ATT-015 | Event-driven      | When the user requests external open, the system SHALL show a warning and call an argument-vector operating-system API without a shell.                                                                                                   |
+| ATT-016 | Unwanted behavior | If safe inline preview is unavailable, then the system SHALL offer a clear copy or external-open fallback.                                                                                                                                |
+| ATT-017 | Unwanted behavior | If an attachment label is generic, missing an extension, or has an extension that conflicts with detected content, the system SHALL suggest a readable type-and-ordinal filename with the detected extension without renaming the source. |
 
 ### 7.7 Privacy and repository safety
 
@@ -355,6 +358,8 @@ The wire schema is generated from shared Rust and TypeScript types. These resour
 | `DELETE /api/index`                                      | Bearer                    | Delete derived index and cache                                             |
 | `GET /api/conversations`                                 | Bearer                    | `page` and `pageSize` conversation summaries, search, sorting, and filters |
 | `GET /api/conversations/{conversation_id}`               | Bearer                    | Bounded active-path and branch data                                        |
+| `GET /api/conversations/{conversation_id}/export`        | Bearer                    | Estimate a Markdown, PDF, or text conversation document                    |
+| `POST /api/conversations/{conversation_id}/export`       | Bearer + native user UI   | Save a Markdown, PDF, or text conversation document                        |
 | `POST /api/attachments/{attachment_id}/media-capability` | Bearer                    | Mint session-bound media URL                                               |
 | `GET /api/attachments/{attachment_id}/text`              | Bearer                    | Read a bounded escaped-text preview                                        |
 | `GET /media/{capability}`                                | Signed capability         | Bounded full or single-range attachment response                           |

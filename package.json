@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-history-browser",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "A privacy-first local browser for official ChatGPT data exports.",
   "type": "module",

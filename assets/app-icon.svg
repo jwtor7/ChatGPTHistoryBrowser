@@ -1,14 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
-  <title id="title">ChatGPT History Browser</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">History Browser archive search icon</title>
   <defs>
-    <linearGradient id="background" x1="72" y1="56" x2="448" y2="472" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#203D36"/>
+    <linearGradient id="background" x1="144" y1="104" x2="872" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#214D44"/>
       <stop offset="1" stop-color="#10201E"/>
     </linearGradient>
+    <linearGradient id="archive-card" x1="190" y1="270" x2="702" y2="690" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFDF7"/>
+      <stop offset="1" stop-color="#E8E0D2"/>
+    </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#background)"/>
-  <path d="M132 136h248a36 36 0 0 1 36 36v154a36 36 0 0 1-36 36H252l-74 58v-58h-46a36 36 0 0 1-36-36V172a36 36 0 0 1 36-36Z" fill="#F4EFE5"/>
-  <path d="M178 226h156M178 278h108" fill="none" stroke="#203D36" stroke-width="24" stroke-linecap="round"/>
-  <circle cx="358" cy="302" r="68" fill="#D7A84B"/>
-  <path d="M332 292v-16a26 26 0 0 1 52 0v16m-61 0h70v54h-70Z" fill="none" stroke="#10201E" stroke-width="14" stroke-linejoin="round"/>
+
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+
+  <g transform="rotate(-5 470 460)">
+    <rect x="224" y="194" width="548" height="388" rx="58" fill="#185F8D"/>
+    <rect x="158" y="270" width="548" height="388" rx="58" fill="url(#archive-card)"/>
+    <path d="M246 380h300M246 464h224" fill="none" stroke="#173B35" stroke-width="38" stroke-linecap="round"/>
+    <path d="M568 270h82v92l-41 30-41-30Z" fill="#D8A94D"/>
+  </g>
+
+  <g>
+    <circle cx="668" cy="652" r="166" fill="#10201E" stroke="#D8A94D" stroke-width="68"/>
+    <path d="M786 770 900 884" fill="none" stroke="#D8A94D" stroke-width="82" stroke-linecap="round"/>
+    <circle cx="668" cy="652" r="92" fill="#173B35"/>
+  </g>
 </svg>
