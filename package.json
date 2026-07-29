@@ -27,7 +27,7 @@
     "privacy:history": "node scripts/privacy/audit-git-objects.mjs",
     "privacy:package": "node scripts/privacy/audit-package.mjs",
     "generate:synthetic": "node scripts/synthetic/generate-export.mjs",
-    "check": "npm run privacy && npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build:web"
+    "check": "npm run privacy && npm run format:check && npm run build:web && npm run lint && npm run typecheck && npm run test"
   },
   "engines": {
     "node": ">=20.19"
