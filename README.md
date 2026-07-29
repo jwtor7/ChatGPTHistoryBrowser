@@ -34,7 +34,7 @@ search index on your device.
 
 ### What you can do
 
-- Search years of conversations in milliseconds.
+- Search across years of conversations with a fast local full-text index.
 - Filter by date, role, archive state, starred state, attachment presence, and
   detected file type: images, audio, video, PDFs, text, other files, or
   missing.
@@ -55,14 +55,12 @@ The current release supports **Apple silicon Macs**.
 3. Open the app, choose the folder containing your extracted official export,
    review the detected summary, and start indexing.
 
-### Current signing status
+### macOS trust status
 
-The downloadable app is ad-hoc signed so macOS can verify its internal bundle
-integrity. It is **not yet Developer ID signed or Apple-notarized**. Depending
-on your macOS security settings, the first launch may require:
-
-1. Control-click the app and choose **Open**; or
-2. Open **System Settings → Privacy & Security** and approve the blocked app.
+Release `v0.2.0` was ad-hoc signed and may be blocked by Gatekeeper. Starting
+with `v0.2.1`, public releases must be Developer ID signed, Apple-notarized, and
+stapled before the release workflow will publish them. Replace `v0.2.0` with
+`v0.2.1` or later rather than disabling Gatekeeper globally.
 
 Only download builds from this repository’s
 [GitHub Releases](https://github.com/jwtor7/ChatGPTHistoryBrowser/releases).
@@ -153,10 +151,10 @@ such as `**Exceptional Opportunity Scan` becomes
 
 The document contains only the selected message path, with message order,
 roles, and timestamps; alternate branches are not included. The confirmation
-shows the exact serialized size and attachment count before the native macOS
-save dialog opens. Attachment bytes and names, local paths, internal
-identifiers, and session capabilities are excluded. The chosen extension is
-enforced even if the destination name is edited.
+shows the estimated serialized size and exact attachment count before the
+native macOS save dialog opens. Attachment bytes and names, local paths,
+internal identifiers, and session capabilities are excluded. The chosen
+extension is enforced even if the destination name is edited.
 
 Export runs entirely on the device and makes no outbound request. The saved
 document contains private data. If you import or share it, the selected
@@ -179,20 +177,25 @@ npm ci
 npm run dev
 ```
 
-Build the production app and DMG:
+Build an ad-hoc signed app and DMG for local development:
 
 ```sh
 npm run tauri:build
 ```
+
+Public distribution uses `npm run tauri:build:release` in the tag workflow and
+requires Apple signing and notarization credentials.
 
 ## Verify changes
 
 ```sh
 npm run check
 npm run test:security
+npx playwright install chromium
 npm run test:e2e
 npm run test:performance
 npm audit --audit-level=high
+cargo install cargo-audit --locked --version 0.22.2
 cargo audit --file src-tauri/Cargo.lock
 node scripts/privacy/audit-repo.mjs all
 node scripts/privacy/audit-git-objects.mjs
@@ -208,6 +211,7 @@ npm run generate:synthetic -- --output /tmp/chatgpt-history-browser-fixture
 
 ## Releases and contributions
 
+- [OpenWiki documentation](openwiki/quickstart.md)
 - [Latest release](https://github.com/jwtor7/ChatGPTHistoryBrowser/releases/latest)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
@@ -219,8 +223,7 @@ npm run generate:synthetic -- --output /tmp/chatgpt-history-browser-fixture
 required checks pass. Versioned tags automatically run the complete release
 workflow and publish the macOS DMG with checksums.
 
-Windows, Linux, Intel macOS, Developer ID signing, and notarization are future
-release work.
+Windows, Linux, and Intel macOS are future release work.
 
 ## Independent project
 

@@ -92,17 +92,66 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit --file src-tauri/Cargo.lock
 
-      - name: Build macOS package
-        run: npm run tauri:build
+      - name: Require Apple signing and notarization credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          missing=0
+          for variable in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_API_ISSUER \
+            APPLE_API_KEY \
+            APPLE_API_KEY_P8
+          do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "::error::Missing required repository secret: ${variable}"
+              missing=1
+            fi
+          done
+          [[ "$missing" -eq 0 ]]
+
+      - name: Prepare App Store Connect API key
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$api_key_path"
+          chmod 600 "$api_key_path"
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+
+      - name: Build signed and notarized macOS package
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: npm run tauri:build:release
 
       - name: Scan and verify packaged output
         run: |
+          app_path="src-tauri/target/release/bundle/macos/ChatGPT History Browser.app"
+          dmg_path="src-tauri/target/release/bundle/dmg/ChatGPT History Browser_${GITHUB_REF_NAME#v}_aarch64.dmg"
           node scripts/privacy/audit-repo.mjs build
           npm run privacy:package
-          codesign --verify --deep --strict --verbose=2 \
-            "src-tauri/target/release/bundle/macos/ChatGPT History Browser.app"
-          hdiutil verify \
-            "src-tauri/target/release/bundle/dmg/ChatGPT History Browser_${GITHUB_REF_NAME#v}_aarch64.dmg"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          codesign --verify --verbose=2 "$dmg_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "$dmg_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          spctl --assess --type open \
+            --context context:primary-signature \
+            --verbose=4 \
+            "$dmg_path"
+          hdiutil verify "$dmg_path"
 
       - name: Prepare release assets
         run: |
