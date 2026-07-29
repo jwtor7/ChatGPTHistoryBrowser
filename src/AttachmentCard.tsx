@@ -30,8 +30,9 @@ const MIME_ALLOWLIST = {
     'audio/wav',
     'audio/webm',
     'audio/x-m4a',
+    'audio/x-wav',
   ]),
-  video: new Set(['video/mp4', 'video/ogg', 'video/quicktime', 'video/webm']),
+  video: new Set(['video/mp4', 'video/mpeg', 'video/ogg', 'video/quicktime', 'video/webm']),
   pdf: new Set(['application/pdf']),
 } as const;
 
@@ -46,6 +47,49 @@ function formatBytes(bytes: number | null): string {
     unit = units[index];
   }
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+function attachmentCategory(
+  attachment: AttachmentView,
+): 'image' | 'audio' | 'video' | 'pdf' | 'text' | 'unsupported' | 'missing' {
+  const mime = attachment.detectedMime?.toLowerCase().split(';', 1)[0] ?? '';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('text/')) return 'text';
+  if (mime === 'application/pdf') return 'pdf';
+  return attachment.previewKind;
+}
+
+function formatAttachmentType(attachment: AttachmentView): string {
+  const mime = attachment.detectedMime?.toLowerCase().split(';', 1)[0] ?? '';
+  const labels: Record<string, string> = {
+    'application/pdf': 'PDF document',
+    'audio/aac': 'AAC audio',
+    'audio/flac': 'FLAC audio',
+    'audio/m4a': 'M4A audio',
+    'audio/mp4': 'M4A audio',
+    'audio/mpeg': 'MP3 audio',
+    'audio/ogg': 'OGG audio',
+    'audio/wav': 'WAV audio',
+    'audio/webm': 'WebM audio',
+    'audio/x-m4a': 'M4A audio',
+    'audio/x-wav': 'WAV audio',
+    'image/jpeg': 'JPEG image',
+    'image/png': 'PNG image',
+    'text/plain': 'Text file',
+    'video/mp4': 'MP4 video',
+    'video/ogg': 'OGG video',
+    'video/mpeg': 'MPEG video',
+    'video/quicktime': 'QuickTime video',
+    'video/webm': 'WebM video',
+  };
+  if (labels[mime]) return labels[mime];
+  const category = attachmentCategory(attachment);
+  if (category === 'missing') return 'Missing file';
+  if (category === 'unsupported') return 'Unknown file type';
+  if (category === 'pdf') return 'PDF document';
+  return `${category[0].toUpperCase()}${category.slice(1)} file`;
 }
 
 function safePreviewMime(
@@ -79,12 +123,13 @@ function pdfPreviewBlockedMessage(attachment: AttachmentView): string | null {
   return null;
 }
 
-function AttachmentIcon({ previewKind }: Pick<AttachmentView, 'previewKind'>) {
+function AttachmentIcon({ attachment }: { attachment: AttachmentView }) {
+  const category = attachmentCategory(attachment);
   const props = { size: 18, strokeWidth: 1.8, 'aria-hidden': true } as const;
-  if (previewKind === 'image') return <FileImage {...props} />;
-  if (previewKind === 'audio') return <FileAudio {...props} />;
-  if (previewKind === 'video') return <FileVideo {...props} />;
-  if (previewKind === 'text') return <FileText {...props} />;
+  if (category === 'image') return <FileImage {...props} />;
+  if (category === 'audio') return <FileAudio {...props} />;
+  if (category === 'video') return <FileVideo {...props} />;
+  if (category === 'text') return <FileText {...props} />;
   return <File {...props} />;
 }
 
@@ -401,7 +446,11 @@ export function AttachmentCard({
     setSaveMessage(null);
     try {
       const result = await api.saveAttachment(attachment.id);
-      setSaveMessage(result.saved ? 'Copy saved.' : 'Save cancelled.');
+      setSaveMessage(
+        result.saved
+          ? `Saved ${result.fileName ?? attachment.displayName}.`
+          : 'Save cancelled.',
+      );
     } catch {
       setSaveMessage('The attachment could not be saved.');
     } finally {
@@ -413,19 +462,18 @@ export function AttachmentCard({
     <section className="attachment" aria-label={`Attachment: ${attachment.displayName}`}>
       <header className="attachment-header">
         <span className="attachment-kind">
-          <AttachmentIcon previewKind={attachment.previewKind} />
+          <AttachmentIcon attachment={attachment} />
         </span>
         <span className="attachment-name">
           <strong>{attachment.displayName}</strong>
           <span>
-            {formatBytes(attachment.byteSize)}
-            {attachment.detectedMime ? ` · ${attachment.detectedMime}` : ''}
+            {formatAttachmentType(attachment)} · {formatBytes(attachment.byteSize)}
           </span>
         </span>
         {!unavailable ? (
           <button
             type="button"
-            className="icon-button"
+            className="button button-quiet button-small attachment-save"
             onClick={() => void save()}
             disabled={saving}
             aria-label={`Save a copy of ${attachment.displayName}`}
@@ -436,6 +484,7 @@ export function AttachmentCard({
             ) : (
               <Download size={17} aria-hidden="true" />
             )}
+            <span>{saving ? 'Saving…' : 'Save copy'}</span>
           </button>
         ) : null}
       </header>

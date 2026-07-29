@@ -2,11 +2,12 @@ import type {
   ApiErrorBody,
   AppStatus,
   ConversationDetail,
+  ConversationExportEstimate,
+  ConversationExportFormat,
   ConversationFilters,
   ConversationPage,
   ExportValidation,
   IndexProgress,
-  PortableExportEstimate,
 } from './types';
 
 const API_PREFIX = '/api/';
@@ -162,6 +163,9 @@ export class LocalApi {
     if (filters.hasAttachments) {
       query.set('hasAttachments', filters.hasAttachments);
     }
+    if (filters.attachmentKind) {
+      query.set('attachmentKind', filters.attachmentKind);
+    }
 
     return this.request(`/api/conversations?${query.toString()}`);
   }
@@ -171,22 +175,29 @@ export class LocalApi {
     return this.request(`/api/conversations/${encodeURIComponent(id)}${suffix}`);
   }
 
-  portableExportEstimate(id: string, leaf?: string): Promise<PortableExportEstimate> {
-    const suffix = leaf ? `?leaf=${encodeURIComponent(leaf)}` : '';
+  conversationExportEstimate(
+    id: string,
+    format: ConversationExportFormat,
+    leaf?: string,
+  ): Promise<ConversationExportEstimate> {
+    const query = new URLSearchParams({ format });
+    if (leaf) query.set('leaf', leaf);
     return this.request(
-      `/api/conversations/${encodeURIComponent(id)}/portable-export${suffix}`,
+      `/api/conversations/${encodeURIComponent(id)}/export?${query.toString()}`,
     );
   }
 
-  savePortableExport(id: string, leaf?: string): Promise<{ saved: boolean }> {
-    const suffix = leaf ? `?leaf=${encodeURIComponent(leaf)}` : '';
-    return this.request(
-      `/api/conversations/${encodeURIComponent(id)}/portable-export${suffix}`,
-      {
-        method: 'POST',
-        body: JSON.stringify({}),
-      },
-    );
+  saveConversationExport(
+    id: string,
+    format: ConversationExportFormat,
+    leaf?: string,
+  ): Promise<{ saved: boolean; fileName?: string }> {
+    const query = new URLSearchParams({ format });
+    if (leaf) query.set('leaf', leaf);
+    return this.request(`/api/conversations/${encodeURIComponent(id)}/export?${query}`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
   }
 
   attachmentContent(id: string, signal?: AbortSignal): Promise<Blob> {
@@ -220,7 +231,7 @@ export class LocalApi {
     return response.text();
   }
 
-  saveAttachment(id: string): Promise<{ saved: boolean }> {
+  saveAttachment(id: string): Promise<{ saved: boolean; fileName?: string }> {
     return this.request(`/api/attachments/${encodeURIComponent(id)}/save`, {
       method: 'POST',
       body: JSON.stringify({}),

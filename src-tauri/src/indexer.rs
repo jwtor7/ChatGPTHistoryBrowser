@@ -363,6 +363,7 @@ mod tests {
                 archived: None,
                 starred: None,
                 has_attachments: None,
+                attachment_kind: None,
             })
             .expect("query conversations")
             .total

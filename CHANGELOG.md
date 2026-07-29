@@ -7,19 +7,44 @@ All notable user-facing changes are documented here. This project follows
 
 ### Added
 
-- Provider-neutral active-path export with a versioned JSON manifest, embedded
-  Markdown, reusable import prompt, exact pre-save estimates, and a native
-  macOS save dialog.
-- Round-trip coverage for message order, roles, timestamps, and branch
-  provenance, including regression checks that attachment names and branch
-  previews are excluded.
+- Conversation export in Markdown, PDF, and plain text with title-based
+  filenames, an exact filename and size preview, and a native macOS save
+  dialog.
+- Detected file-type filters for images, audio, video, PDFs, text,
+  other/unsupported files, and missing attachments.
+- Regression coverage for export formatting, filename sanitization, attachment
+  extension repair, file-type queries, keyboard focus, and save cancellation.
+
+### Changed
+
+- Refreshed the macOS app, onboarding, indexing, and browser surfaces around an
+  independent archive-search icon, with updated platform assets and
+  privacy-safe product screenshots.
+- Attachment cards now show a useful detected type and a visible **Save copy**
+  action.
+
+### Fixed
+
+- Attachment copies now receive a meaningful sanitized filename and an
+  extension derived from detected content, including generic WAV attachments
+  that previously saved as extensionless `Attachment`.
+- Conversation exports no longer use opaque
+  `context-….portable.json` filenames.
+- PDF export now uses native Unicode text shaping so non-Latin scripts and
+  emoji are preserved instead of being replaced with question marks.
+- Confirmed file replacement now uses a private temporary file and atomic
+  rename rather than failing when the destination already exists.
 
 ### Security
 
-- Portable packages are created offline with opaque filenames and restrictive
-  file permissions. They exclude attachments, local paths, index metadata,
-  diagnostics, and session capabilities, and warn before private data crosses
-  into another provider.
+- Conversation documents are created offline with restrictive file
+  permissions. They exclude attachments, attachment names, local paths,
+  internal identifiers, index metadata, diagnostics, and session capabilities,
+  and warn before private data is shared.
+- Exported Markdown neutralizes active HTML and remote Markdown resources, and
+  all text formats visibly encode terminal control characters.
+- Attachment copies use a passive detected extension; unknown content uses
+  `.bin` instead of restoring an executable source suffix.
 
 ## [0.1.1] - 2026-07-28
 

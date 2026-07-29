@@ -61,6 +61,7 @@ fn performance_10000() {
             archived: None,
             starred: None,
             has_attachments: None,
+            attachment_kind: None,
         })
         .unwrap_or_else(|_| panic!("synthetic search failed"));
     let query_elapsed = query_started.elapsed();

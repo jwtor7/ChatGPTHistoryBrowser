@@ -48,7 +48,12 @@ pub fn resolve_attachment(
     let Some(source_name) = source_name else {
         return Ok(ResolvedAttachment {
             key,
-            display_name: projected.display_name.clone(),
+            display_name: attachment_display_name(
+                &projected.display_name,
+                projected.claimed_mime.as_deref(),
+                PreviewKind::Missing,
+                ordinal,
+            ),
             reference: projected.reference.clone(),
             source_name: None,
             claimed_mime: projected.claimed_mime.clone(),
@@ -65,7 +70,12 @@ pub fn resolve_attachment(
     if entry.size > MAX_DOWNLOAD_BYTES {
         return Ok(ResolvedAttachment {
             key,
-            display_name: projected.display_name.clone(),
+            display_name: attachment_display_name(
+                &projected.display_name,
+                projected.claimed_mime.as_deref(),
+                PreviewKind::Unsupported,
+                ordinal,
+            ),
             reference: projected.reference.clone(),
             source_name: None,
             claimed_mime: projected.claimed_mime.clone(),
@@ -81,10 +91,16 @@ pub fn resolve_attachment(
     let count = file.read(&mut prefix)?;
     prefix.truncate(count);
     let (detected_mime, preview_kind) = bounded_preview_kind(&prefix, entry.size);
+    let display_name = attachment_display_name(
+        &projected.display_name,
+        detected_mime.as_deref(),
+        preview_kind,
+        ordinal,
+    );
 
     Ok(ResolvedAttachment {
         key,
-        display_name: projected.display_name.clone(),
+        display_name,
         reference: projected.reference.clone(),
         source_name: Some(source_name),
         claimed_mime: projected.claimed_mime.clone(),
@@ -154,7 +170,29 @@ pub fn read_range(
     Ok(bytes)
 }
 
-pub fn safe_download_name(value: &str) -> String {
+pub fn safe_download_name(
+    value: &str,
+    detected_mime: Option<&str>,
+    preview_kind: PreviewKind,
+) -> String {
+    attachment_name(value, detected_mime, preview_kind, None)
+}
+
+fn attachment_display_name(
+    value: &str,
+    detected_mime: Option<&str>,
+    preview_kind: PreviewKind,
+    ordinal: usize,
+) -> String {
+    attachment_name(value, detected_mime, preview_kind, Some(ordinal))
+}
+
+fn attachment_name(
+    value: &str,
+    detected_mime: Option<&str>,
+    preview_kind: PreviewKind,
+    ordinal: Option<usize>,
+) -> String {
     let cleaned: String = value
         .chars()
         .filter(|character| !character.is_control())
@@ -165,14 +203,165 @@ pub fn safe_download_name(value: &str) -> String {
                 character
             }
         })
-        .take(240)
         .collect();
     let trimmed = cleaned.trim_matches([' ', '.']);
-    if trimmed.is_empty() {
-        "attachment.bin".to_string()
+    let (stem, current_extension) = split_extension(trimmed);
+    let generic = stem.is_empty()
+        || matches!(
+            stem.to_ascii_lowercase().as_str(),
+            "attachment" | "file" | "download" | "untitled"
+        );
+    let stem = if generic {
+        let category = attachment_category(detected_mime, preview_kind);
+        match ordinal {
+            Some(index) => format!("{category} attachment {}", index.saturating_add(1)),
+            None => format!("{category} attachment"),
+        }
     } else {
-        trimmed.to_string()
+        stem.to_string()
+    };
+    let extension = preferred_extension(detected_mime, preview_kind, current_extension);
+    bounded_name(&stem, extension)
+}
+
+fn split_extension(value: &str) -> (&str, Option<&str>) {
+    let Some((stem, extension)) = value.rsplit_once('.') else {
+        return (value, None);
+    };
+    if stem.is_empty()
+        || extension.is_empty()
+        || extension.len() > 16
+        || !extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        (value, None)
+    } else {
+        (stem, Some(extension))
     }
+}
+
+fn preferred_extension<'a>(
+    detected_mime: Option<&str>,
+    _preview_kind: PreviewKind,
+    current: Option<&'a str>,
+) -> &'a str {
+    if let Some(current) = current.filter(|extension| !extension.eq_ignore_ascii_case("dat"))
+        && extension_matches_detected_type(current, detected_mime)
+    {
+        return current;
+    }
+
+    match detected_mime {
+        Some("image/jpeg") => "jpg",
+        Some("image/png") => "png",
+        Some("audio/aac") => "aac",
+        Some("audio/flac") => "flac",
+        Some("audio/m4a" | "audio/mp4" | "audio/x-m4a") => "m4a",
+        Some("audio/mpeg") => "mp3",
+        Some("audio/ogg") => "ogg",
+        Some("audio/wav" | "audio/x-wav") => "wav",
+        Some("audio/webm") => "webm",
+        Some("video/mp4") => "mp4",
+        Some("video/mpeg") => "mpeg",
+        Some("video/ogg") => "ogv",
+        Some("video/quicktime") => "mov",
+        Some("video/webm") => "webm",
+        Some("application/pdf") => "pdf",
+        Some("application/zip") => "zip",
+        Some("text/plain") => "txt",
+        Some(_) | None => "bin",
+    }
+}
+
+fn extension_matches_detected_type(extension: &str, detected_mime: Option<&str>) -> bool {
+    let extension = extension.to_ascii_lowercase();
+    match detected_mime {
+        Some("image/jpeg") => matches!(extension.as_str(), "jpg" | "jpeg"),
+        Some("image/png") => extension == "png",
+        Some("audio/aac") => extension == "aac",
+        Some("audio/flac") => extension == "flac",
+        Some("audio/m4a" | "audio/mp4" | "audio/x-m4a") => extension == "m4a",
+        Some("audio/mpeg") => extension == "mp3",
+        Some("audio/ogg") => extension == "ogg",
+        Some("audio/wav" | "audio/x-wav") => extension == "wav",
+        Some("audio/webm") => extension == "webm",
+        Some("video/mp4") => extension == "mp4",
+        Some("video/mpeg") => matches!(extension.as_str(), "mpeg" | "mpg"),
+        Some("video/ogg") => matches!(extension.as_str(), "ogv" | "ogg"),
+        Some("video/quicktime") => extension == "mov",
+        Some("video/webm") => extension == "webm",
+        Some("application/pdf") => extension == "pdf",
+        Some("application/zip") => extension == "zip",
+        Some("text/plain") => is_passive_text_extension(&extension),
+        Some(_) | None => false,
+    }
+}
+
+fn is_passive_text_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "txt"
+            | "md"
+            | "markdown"
+            | "csv"
+            | "tsv"
+            | "json"
+            | "jsonl"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "log"
+            | "rst"
+    )
+}
+
+fn attachment_category(detected_mime: Option<&str>, preview_kind: PreviewKind) -> &'static str {
+    if let Some(mime) = detected_mime {
+        if mime.starts_with("image/") {
+            return "Image";
+        }
+        if mime.starts_with("audio/") {
+            return "Audio";
+        }
+        if mime.starts_with("video/") {
+            return "Video";
+        }
+        if mime.starts_with("text/") {
+            return "Text";
+        }
+        if mime == "application/pdf" {
+            return "PDF";
+        }
+        if mime == "application/zip" {
+            return "Archive";
+        }
+    }
+
+    match preview_kind {
+        PreviewKind::Image => "Image",
+        PreviewKind::Audio => "Audio",
+        PreviewKind::Video => "Video",
+        PreviewKind::Pdf => "PDF",
+        PreviewKind::Text => "Text",
+        PreviewKind::Missing => "Missing",
+        PreviewKind::Unsupported => "File",
+    }
+}
+
+fn bounded_name(stem: &str, extension: &str) -> String {
+    const MAX_NAME_BYTES: usize = 240;
+    let suffix = format!(".{extension}");
+    let max_stem_bytes = MAX_NAME_BYTES.saturating_sub(suffix.len()).max(1);
+    let mut boundary = stem.len().min(max_stem_bytes);
+    while boundary > 0 && !stem.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let bounded_stem = stem[..boundary].trim_matches([' ', '.']);
+    let bounded_stem = if bounded_stem.is_empty() {
+        "Attachment"
+    } else {
+        bounded_stem
+    };
+    format!("{bounded_stem}{suffix}")
 }
 
 fn match_attachment_file(
@@ -443,9 +632,82 @@ mod tests {
     #[test]
     fn download_names_remove_header_and_path_characters() {
         assert_eq!(
-            safe_download_name("../Synthetic\r\nname.txt"),
+            safe_download_name(
+                "../Synthetic\r\nname.txt",
+                Some("text/plain"),
+                PreviewKind::Text
+            ),
             "_Syntheticname.txt"
         );
+    }
+
+    #[test]
+    fn generic_audio_names_gain_a_meaningful_wav_extension() {
+        assert_eq!(
+            safe_download_name("Attachment", Some("audio/wav"), PreviewKind::Audio),
+            "Audio attachment.wav"
+        );
+        assert_eq!(
+            attachment_display_name("Attachment", Some("audio/wav"), PreviewKind::Audio, 1),
+            "Audio attachment 2.wav"
+        );
+        assert_eq!(
+            safe_download_name("Attachment", Some("audio/wav"), PreviewKind::Unsupported),
+            "Audio attachment.wav"
+        );
+    }
+
+    #[test]
+    fn detected_content_repairs_misleading_or_dat_extensions() {
+        assert_eq!(
+            safe_download_name(
+                "Quarterly recording.dat",
+                Some("audio/wav"),
+                PreviewKind::Audio
+            ),
+            "Quarterly recording.wav"
+        );
+        assert_eq!(
+            safe_download_name(
+                "Not really a photo.jpg",
+                Some("application/pdf"),
+                PreviewKind::Pdf
+            ),
+            "Not really a photo.pdf"
+        );
+    }
+
+    #[test]
+    fn meaningful_text_extensions_and_bounded_unicode_names_are_preserved() {
+        assert_eq!(
+            safe_download_name("results.csv", Some("text/plain"), PreviewKind::Text),
+            "results.csv"
+        );
+        assert_eq!(
+            safe_download_name(
+                "plain-text-with-wrong.wav",
+                Some("text/plain"),
+                PreviewKind::Text
+            ),
+            "plain-text-with-wrong.txt"
+        );
+        assert_eq!(
+            safe_download_name("active-script.sh", Some("text/plain"), PreviewKind::Text),
+            "active-script.txt"
+        );
+        assert_eq!(
+            safe_download_name(
+                "unknown-program.exe",
+                Some("application/octet-stream"),
+                PreviewKind::Unsupported
+            ),
+            "unknown-program.bin"
+        );
+        let long_name = format!("{} report", "é".repeat(180));
+        let resolved = safe_download_name(&long_name, Some("text/plain"), PreviewKind::Text);
+        assert!(resolved.ends_with(".txt"));
+        assert!(resolved.len() <= 240);
+        assert!(std::str::from_utf8(resolved.as_bytes()).is_ok());
     }
 
     #[test]

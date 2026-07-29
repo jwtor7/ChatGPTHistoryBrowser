@@ -310,6 +310,6 @@ describe('renderer security boundaries', () => {
     await user.click(save);
     expect(await screen.findByText(/save cancelled/i)).toBeVisible();
     await user.click(save);
-    expect(await screen.findByText(/copy saved/i)).toBeVisible();
+    expect(await screen.findByText(/saved fictional-save-result\.txt/i)).toBeVisible();
   });
 });

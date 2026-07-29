@@ -1,18 +1,16 @@
 import {
   AlertCircle,
-  ArchiveRestore,
-  Database,
   FolderOpen,
   LoaderCircle,
   LockKeyhole,
   RefreshCcw,
-  Search,
   ShieldCheck,
   Square,
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError, LocalApi, unwrapIndexProgress } from './api';
+import { BrandArtwork, BrandMark } from './BrandMark';
 import { ConversationBrowser } from './ConversationBrowser';
 import {
   bootstrapSessionToken,
@@ -82,9 +80,7 @@ function LoadingApp() {
   return (
     <main className="state-page" aria-label="Starting History Browser">
       <div className="loading-lockup" role="status">
-        <span className="brand-mark brand-mark-large" aria-hidden="true">
-          <Search size={25} />
-        </span>
+        <BrandMark className="brand-mark-large brand-mark-loading" />
         <span>
           <strong>History Browser</strong>
           <small>Starting the private local service…</small>
@@ -107,9 +103,7 @@ function Onboarding({
     <main className="onboarding">
       <section className="onboarding-copy" aria-labelledby="onboarding-title">
         <div className="brand-lockup onboarding-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <ArchiveRestore size={20} />
-          </span>
+          <BrandMark />
           <span>
             <strong>History Browser</strong>
             <small>Private by design</small>
@@ -149,6 +143,7 @@ function Onboarding({
       </section>
 
       <aside className="trust-rail" aria-label="Privacy details">
+        <BrandArtwork className="trust-artwork" />
         <div className="trust-rule" />
         <article>
           <span>01</span>
@@ -216,9 +211,7 @@ function IndexWorkspace({
     <main className="state-page index-page">
       <section className="index-panel" aria-labelledby="index-title">
         <header className="brand-lockup index-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <Database size={20} />
-          </span>
+          <BrandMark />
           <span>
             <strong>History Browser</strong>
             <small>Local archive</small>
