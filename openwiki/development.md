@@ -11,6 +11,7 @@
 | `tests/e2e/`         | Playwright checks against the production web build with mocked same-origin APIs          |
 | `src-tauri/tests/`   | Release-scale Rust performance tests                                                     |
 | `scripts/privacy/`   | Worktree, history, build, and package privacy gates                                      |
+| `scripts/release/`   | Post-bundle DMG notarization and stapling for GitHub Releases                            |
 | `scripts/synthetic/` | Safe fixture generator                                                                   |
 | `docs/` and `specs/` | Product, security, release, compatibility, and requirement guidance                      |
 
@@ -29,7 +30,8 @@ npm run dev
 Use `npm run web:dev` only for frontend work that does not require the Rust
 backend. `npm run tauri:build` creates an ad-hoc signed app and DMG for local
 development. Public releases use `npm run tauri:build:release` inside the tag
-workflow with Apple signing and notarization credentials.
+workflow with Apple signing and notarization credentials. Tauri notarizes the
+`.app`; the workflow then submits and staples the signed DMG before verify.
 
 ## Command reference
 
@@ -38,7 +40,8 @@ workflow with Apple signing and notarization credentials.
 | `npm run check`            | Privacy scan, format check, web build, lint, type check, and standard tests |
 | `npm run format:check`     | Prettier plus `cargo fmt --check`                                           |
 | `npm run lint`             | ESLint plus Clippy with warnings denied                                     |
-| `npm test`                 | Vitest, synthetic-generator, privacy-audit, and Rust tests                  |
+| `npm test`                 | Vitest, synthetic-generator, privacy-audit, release, and Rust tests         |
+| `npm run notarize:dmg`     | Submit the signed release DMG to Apple and staple the accepted ticket       |
 | `npm run test:security`    | Focused frontend and Rust security regressions                              |
 | `npm run test:e2e`         | Headless Chromium checks at desktop and mobile viewports                    |
 | `npm run test:performance` | Ignored release-scale Rust performance suite                                |

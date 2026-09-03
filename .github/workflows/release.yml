@@ -136,6 +136,14 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: npm run tauri:build:release
 
+      - name: Notarize and staple the release DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          dmg_path="src-tauri/target/release/bundle/dmg/ChatGPT History Browser_${GITHUB_REF_NAME#v}_aarch64.dmg"
+          node scripts/release/notarize-dmg.mjs "$dmg_path"
+
       - name: Scan and verify packaged output
         run: |
           app_path="src-tauri/target/release/bundle/macos/ChatGPT History Browser.app"
