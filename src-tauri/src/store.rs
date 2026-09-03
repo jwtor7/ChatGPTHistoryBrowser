@@ -10,7 +10,7 @@ use std::{
 use directories::ProjectDirs;
 use fs2::FileExt;
 use rusqlite::{
-    Connection, OptionalExtension, Transaction, params, params_from_iter,
+    Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter,
     types::Value as SqlValue,
 };
 use serde_json::Value;
@@ -731,7 +731,13 @@ impl Store {
 
     fn open_connection(&self) -> AppResult<Connection> {
         self.validate_directory()?;
-        let connection = Connection::open(&self.database_path)?;
+        let connection = Connection::open_with_flags(
+            &self.database_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -2396,5 +2402,35 @@ mod tests {
             .expect("replace index directory with symlink");
 
         assert!(store.open_connection().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn security_rejects_a_preseeded_database_symlink() {
+        let (directory, root) = synthetic_export();
+        let cache = directory.path().join("cache");
+        let store = Store::for_export_with_cache_root(&root, &cache).expect("store");
+        fs::remove_file(&store.database_path).expect("remove app database");
+
+        let outside = directory.path().join("outside.sqlite3");
+        let outside_connection = Connection::open(&outside).expect("create outside database");
+        outside_connection
+            .execute_batch("CREATE TABLE sentinel (value TEXT NOT NULL);")
+            .expect("initialize outside database");
+        drop(outside_connection);
+        std::os::unix::fs::symlink(&outside, &store.database_path)
+            .expect("preseed database symlink");
+
+        assert!(store.open_connection().is_err());
+        let outside_connection = Connection::open(&outside).expect("reopen outside database");
+        assert!(
+            outside_connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'sentinel'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .is_ok()
+        );
     }
 }
