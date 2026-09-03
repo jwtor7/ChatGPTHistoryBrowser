@@ -68,13 +68,18 @@ From a clean checkout of `main`:
 7. Run `node scripts/privacy/audit-repo.mjs all` and
    `node scripts/privacy/audit-git-objects.mjs`.
 8. Run `npm run tauri:build:release` with the Apple signing and notarization
-   environment configured, then run `npm run privacy:package`.
-9. Verify the app and DMG signatures with `codesign --verify`.
-10. Validate the stapled notarization tickets with `xcrun stapler validate`.
-11. Assess the app and DMG with `spctl --assess`.
-12. Verify the DMG filesystem with `hdiutil verify`.
-13. Merge the release preparation through the normal pull-request path.
-14. Create and push an annotated `vX.Y.Z` tag on the verified `main` commit.
+   environment configured. Tauri notarizes and staples the `.app` only.
+9. Run `npm run notarize:dmg` against the signed DMG. This submits that DMG
+   with `xcrun notarytool submit`, waits until status is `Accepted`, and
+   staples the ticket onto the same file. The `.app` ticket cannot be reused
+   because notarization tickets are per-cdhash.
+10. Run `npm run privacy:package`.
+11. Verify the app and DMG signatures with `codesign --verify`.
+12. Validate the stapled notarization tickets with `xcrun stapler validate`.
+13. Assess the app and DMG with `spctl --assess`.
+14. Verify the DMG filesystem with `hdiutil verify`.
+15. Merge the release preparation through the normal pull-request path.
+16. Create and push an annotated `vX.Y.Z` tag on the verified `main` commit.
 
 The tag-triggered release workflow repeats the release gates, creates
 `ChatGPT-History-Browser-macOS-arm64.dmg`, generates `SHA256SUMS.txt`, and
@@ -96,6 +101,10 @@ are configured:
 
 `npm run tauri:build` remains ad-hoc signed for local development.
 `npm run tauri:build:release` deliberately has no ad-hoc fallback. Tauri imports
-the certificate, enables hardened runtime, submits the package to Apple, and
-staples the accepted ticket. The workflow publishes nothing unless signature,
-ticket, Gatekeeper, privacy, and DMG-integrity checks all pass.
+the certificate, enables hardened runtime, submits the `.app` to Apple, and
+staples that accepted ticket. Tauri 2.11.5 then builds a signed DMG that is
+not submitted. The release workflow and `npm run notarize:dmg` submit that
+DMG with the App Store Connect API key, wait until notarization is
+`Accepted`, and staple the ticket onto the same DMG. The workflow publishes
+nothing unless signature, ticket, Gatekeeper, privacy, and DMG-integrity
+checks all pass.

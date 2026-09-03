@@ -5,6 +5,13 @@ All notable user-facing changes are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Release packaging now submits the signed macOS DMG to Apple notarization
+  and staples that ticket. Tauri already notarized the `.app`; the GitHub
+  Release DMG previously failed `xcrun stapler validate` because it was
+  never submitted.
+
 ## [0.2.1] - 2026-07-29
 
 ### Fixed
